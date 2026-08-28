@@ -14,7 +14,11 @@ failure modes matter in a real room:
   → we put it back on the dashboard.
 
 Join automation runs on its own thread with a deadline, retries with a gentle
-backoff, and stops the moment the page looks like it is in the call.
+backoff, and stops the moment the page looks like it is in the call. Exactly one
+attempt may be live at a time: each gets its own stop event and a generation
+number, so an attempt that has been cancelled can never be revived by the next
+one starting. Two loops clicking at one page is what "it joins the meeting
+several times" looked like from the room.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from .config import ConfigManager
 from .join_flows import (
     build_click_script,
     build_in_call_script,
+    build_mute_script,
     flow_for,
     ordered_button_texts,
     prepare_url,
@@ -47,6 +52,12 @@ TARGET_DASHBOARD = "dashboard"
 TARGET_MEETING = "meeting"
 TARGET_UNKNOWN = "unknown"
 
+#: How long the room keeps watching a lobby screen. Waiting to be admitted is
+#: success in progress rather than a failure, so it is allowed to outlast the
+#: join deadline — but not for ever: after this the room stops watching and
+#: leaves the page exactly where a person would find it.
+LOBBY_WAIT_SECONDS = 300.0
+
 
 @dataclass
 class JoinAttempt:
@@ -61,6 +72,8 @@ class JoinAttempt:
     passes: int = 0
     error: str = ""
     gave_up: bool = False
+    filled_name: bool = False
+    waiting: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -73,6 +86,8 @@ class JoinAttempt:
             "passes": self.passes,
             "error": self.error,
             "gave_up": self.gave_up,
+            "filled_name": self.filled_name,
+            "waiting": self.waiting,
         }
 
 
@@ -88,7 +103,9 @@ class BrowserService:
         self._target_url = ""
         self._meeting_id = ""
         self._join_thread: threading.Thread | None = None
-        self._join_stop = threading.Event()
+        # One event per attempt, never reused: see _start_join_automation.
+        self._join_stop: threading.Event | None = None
+        self._join_generation = 0
         self._last_attempt = JoinAttempt()
         self._last_alive: float = 0.0
         self._last_seen_url = ""
@@ -121,6 +138,12 @@ class BrowserService:
     def last_attempt(self) -> JoinAttempt:
         with self._lock:
             return self._last_attempt
+
+    @property
+    def join_generation(self) -> int:
+        """Which join attempt is current. Only this one may click."""
+        with self._lock:
+            return self._join_generation
 
     def is_alive(self) -> bool:
         """True if Chromium is answering on its debug port."""
@@ -248,40 +271,129 @@ class BrowserService:
 
     # -- join automation -------------------------------------------------
     def _start_join_automation(self, meeting: Meeting) -> None:
-        self._join_stop.clear()
+        """Begin a fresh attempt, cancelling any earlier one for good.
+
+        The old code shared one stop event between attempts and *cleared* it
+        here. A thread parked in an eight-second ``evaluate`` outlived the
+        three-second join below, woke up, found the flag clear and carried on
+        clicking alongside the new attempt — two loops, one page, a meeting
+        joined twice. Now every attempt owns its event and a generation number,
+        and neither is ever handed back.
+        """
+        self._stop_join_automation()
         attempt = JoinAttempt(
             meeting_id=meeting.uid,
             provider=meeting.provider_id,
             started_at=datetime.now(timezone.utc),
         )
+        stop = threading.Event()
         with self._lock:
+            self._join_generation += 1
+            generation = self._join_generation
+            self._join_stop = stop
             self._last_attempt = attempt
-            self._join_thread = threading.Thread(
+            thread = threading.Thread(
                 target=self._join_loop,
-                args=(meeting, attempt),
-                name="join-automation",
+                args=(meeting, attempt, stop, generation),
+                name=f"join-automation-{generation}",
                 daemon=True,
             )
-            thread = self._join_thread
+            self._join_thread = thread
         thread.start()
 
     def _stop_join_automation(self) -> None:
-        self._join_stop.set()
+        """Cancel the running attempt. A cancelled attempt never comes back."""
         with self._lock:
+            stop = self._join_stop
             thread = self._join_thread
+            self._join_stop = None
+            self._join_thread = None
+            # Moving the generation on matters as much as setting the event: a
+            # thread blocked in a DevTools call can outlive the join() below,
+            # and this is what stops it at its next checkpoint.
+            self._join_generation += 1
+        if stop is not None:
+            stop.set()
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=3)
 
-    def _join_loop(self, meeting: Meeting, attempt: JoinAttempt) -> None:
+    def _join_cancelled(
+        self, stop: threading.Event, generation: int, meeting_id: str
+    ) -> bool:
+        """True when this attempt must stop; checked at every step of the loop.
+
+        Three ways an attempt ends early: its own stop event, a newer attempt
+        taking over, or something else moving the browser somewhere new.
+        """
+        if stop.is_set():
+            return True
+        with self._lock:
+            return self._join_generation != generation or self._meeting_id != meeting_id
+
+    def _join_wait(
+        self, stop: threading.Event, generation: int, meeting_id: str, seconds: float
+    ) -> bool:
+        """Sleep between passes. True means the attempt has been cancelled."""
+        if stop.wait(timeout=max(0.0, seconds)):
+            return True
+        return self._join_cancelled(stop, generation, meeting_id)
+
+    def _repeat_guard(
+        self, recent: dict[str, tuple[str, float]]
+    ) -> list[tuple[str, str]]:
+        """Buttons the page must not be asked to press again just yet.
+
+        A meeting page can look unchanged for several seconds after Join is
+        pressed, so the next pass finds the same button and presses it again —
+        which from a chair in the room looks like the meeting being joined over
+        and over. Each entry is released as soon as the page moves to another
+        URL, or after ``JOIN_REPEAT_GUARD_SECONDS``; 0 switches the guard off.
+        """
+        seconds = self.config.float_("JOIN_REPEAT_GUARD_SECONDS")
+        if seconds <= 0:
+            recent.clear()
+            return []
+        now = time.monotonic()
+        for text in [t for t, (_, when) in recent.items() if now - when >= seconds]:
+            del recent[text]
+        return [(text, url) for text, (url, _) in recent.items()]
+
+    def _mute_on_entry(self, meeting: Meeting) -> bool:
+        """Mute the room as it enters the call, when JOIN_MUTE_ON_ENTRY is on.
+
+        Once per join, straight after the in-call signal — never in the loop,
+        because a room that keeps pressing mute is a room that ends up unmuted.
+        """
+        if not self.config.bool_("JOIN_MUTE_ON_ENTRY"):
+            return False
+        muted = self.mute_meeting_microphone()
+        log_event(
+            log,
+            logging.INFO if muted else logging.DEBUG,
+            "meeting.join_muted_on_entry" if muted else "meeting.join_mute_not_found",
+            provider=meeting.provider_id,
+        )
+        return muted
+
+    def _join_loop(
+        self,
+        meeting: Meeting,
+        attempt: JoinAttempt,
+        stop: threading.Event,
+        generation: int,
+    ) -> None:
         """Press the join buttons, giving up quietly after the deadline."""
         flow = flow_for(meeting.provider_id)
         deadline = time.monotonic() + self.config.int_("AUTO_JOIN_TIMEOUT_SECONDS")
-        script = build_click_script(
-            ordered_button_texts(meeting.provider_id, self.config.list_("JOIN_BUTTON_TEXTS")),
-            display_name=self.config.join_display_name(),
-            fill_name=flow.asks_for_name,
+        texts = ordered_button_texts(
+            meeting.provider_id, self.config.list_("JOIN_BUTTON_TEXTS")
         )
+        display_name = self.config.join_display_name()
         in_call_script = build_in_call_script()
+
+        #: What was pressed, where, and when — the repeat guard is built from it.
+        recent_clicks: dict[str, tuple[str, float]] = {}
+        lobby_deadline: float | None = None
 
         # Let the page load before poking at it. Clicking into a half-drawn
         # page is worse than waiting: the buttons are not there yet, and on
@@ -291,45 +403,89 @@ class BrowserService:
             log, logging.DEBUG, "meeting.join_waiting_for_page",
             provider=meeting.provider_id, seconds=settle,
         )
-        if self._join_stop.wait(timeout=settle):
+        if self._join_wait(stop, generation, meeting.uid, settle):
             return
 
         interval = 2.0
-        while not self._join_stop.is_set() and time.monotonic() < deadline:
-            # Abandon automation if something else moved the browser on.
-            with self._lock:
-                if self._meeting_id != meeting.uid:
-                    return
+        while not self._join_cancelled(stop, generation, meeting.uid):
+            now = time.monotonic()
+            in_lobby = lobby_deadline is not None and now < lobby_deadline
+            if now >= deadline and not in_lobby:
+                break
 
             try:
-                in_call = self._cdp.evaluate(in_call_script, timeout=6.0)
-                if str(in_call).lower() == "true":
+                probe = self._cdp.evaluate(in_call_script, timeout=6.0)
+                if str(probe).lower() == "true":
                     attempt.in_call = True
                     attempt.finished_at = datetime.now(timezone.utc)
+                    muted = self._mute_on_entry(meeting)
                     log_event(
                         log, logging.INFO, "meeting.join_automation_succeeded",
                         provider=meeting.provider_id, passes=attempt.passes,
                         clicks=",".join(attempt.clicks[-3:]) or "none",
+                        muted=muted,
                     )
                     return
             except CDPError as exc:
                 attempt.error = str(exc)
 
+            guard = self._repeat_guard(recent_clicks)
             try:
-                raw = self._cdp.evaluate(script, timeout=8.0)
+                raw = self._cdp.evaluate(
+                    build_click_script(
+                        texts,
+                        display_name=display_name,
+                        fill_name=flow.asks_for_name,
+                        guarded_clicks=guard,
+                    ),
+                    timeout=8.0,
+                )
                 attempt.passes += 1
-                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
-                clicked = (payload or {}).get("clicked")
-                if clicked:
-                    attempt.clicks.append(str(clicked)[:60])
+                payload = (json.loads(raw) if isinstance(raw, str) else raw) or {}
+                waiting = str(payload.get("waiting") or "")
+                clicked = str(payload.get("clicked") or "")
+
+                if waiting:
+                    # The room is in the lobby: the page pressed nothing and
+                    # nothing is worth pressing. From here the pass only keeps
+                    # watching for the call to start.
+                    if lobby_deadline is None:
+                        lobby_deadline = time.monotonic() + LOBBY_WAIT_SECONDS
+                        attempt.waiting = True
+                        log_event(
+                            log, logging.INFO, "meeting.join_waiting_to_be_admitted",
+                            provider=meeting.provider_id, page_says=waiting[:60],
+                        )
+                    interval = 3.0
+                elif payload.get("filled_name"):
+                    # The name went in and Join is still disabled; the click is
+                    # the next pass's job, once the page has caught up.
+                    attempt.filled_name = True
+                    log_event(
+                        log, logging.DEBUG, "meeting.join_name_filled",
+                        provider=meeting.provider_id, pass_number=attempt.passes,
+                    )
+                    interval = 2.0
+                elif clicked:
+                    attempt.clicks.append(clicked[:60])
+                    recent_clicks[clicked.strip().lower()] = (
+                        str(payload.get("url") or ""),
+                        time.monotonic(),
+                    )
                     log_event(
                         log, logging.INFO, "meeting.join_automation_attempted",
-                        provider=meeting.provider_id, button=str(clicked)[:40],
+                        provider=meeting.provider_id, button=clicked[:40],
                         pass_number=attempt.passes,
                     )
                     # A click usually triggers a page change; give it room.
                     interval = 3.0
                 else:
+                    if guard:
+                        log_event(
+                            log, logging.DEBUG, "meeting.join_repeat_guarded",
+                            provider=meeting.provider_id,
+                            buttons=",".join(text for text, _ in guard),
+                        )
                     interval = min(6.0, interval * 1.4)
             except CDPError as exc:
                 attempt.error = str(exc)
@@ -340,25 +496,41 @@ class BrowserService:
             except (TypeError, ValueError) as exc:
                 attempt.error = f"unreadable automation result: {exc}"
 
-            if self._join_stop.wait(timeout=interval):
+            if self._join_wait(stop, generation, meeting.uid, interval):
                 return
 
-        if not self._join_stop.is_set():
-            attempt.gave_up = True
-            attempt.finished_at = datetime.now(timezone.utc)
+        if self._join_cancelled(stop, generation, meeting.uid):
+            return
+
+        attempt.finished_at = datetime.now(timezone.utc)
+        if attempt.waiting:
+            # Not a failure: the room is on the meeting's own waiting screen and
+            # joins the moment the host admits it.
             log_event(
-                log,
-                logging.WARNING,
-                "meeting.join_automation_failed",
-                provider=meeting.provider_id,
-                passes=attempt.passes,
-                clicks=",".join(attempt.clicks) or "none",
-                error=attempt.error or "no join button matched",
-                note="the room can still join with the JOIN button",
+                log, logging.INFO, "meeting.join_still_waiting",
+                provider=meeting.provider_id, passes=attempt.passes,
+                note="waiting to be admitted; there is nothing left to press",
             )
+            return
+
+        attempt.gave_up = True
+        log_event(
+            log,
+            logging.WARNING,
+            "meeting.join_automation_failed",
+            provider=meeting.provider_id,
+            passes=attempt.passes,
+            clicks=",".join(attempt.clicks) or "none",
+            error=attempt.error or "no join button matched",
+            note="the room can still join with the JOIN button",
+        )
 
     def retry_join(self) -> bool:
-        """Run the join automation again for the meeting already on screen."""
+        """Run the join automation again for the meeting already on screen.
+
+        This is the "try again" path: it never navigates, so a half-finished
+        join is picked up where it is rather than reloaded from the top.
+        """
         with self._lock:
             meeting_id = self._meeting_id
             provider = self._last_attempt.provider
@@ -372,8 +544,8 @@ class BrowserService:
             provider_id=provider,
             join_url="already-open",
         )
-        self._stop_join_automation()
         self._start_join_automation(placeholder)
+        log_event(log, logging.INFO, "meeting.join_automation_retried", provider=provider)
         return True
 
     def leave_meeting(self, *, reason: str = "hangup") -> bool:
@@ -384,12 +556,7 @@ class BrowserService:
             hangup_texts = [
                 "Leave call", "Leave meeting", "Leave", "Hang up", "End call", "End meeting",
             ]
-            try:
-                self._cdp.evaluate(
-                    build_click_script(hangup_texts, fill_name=False), timeout=6.0
-                )
-            except CDPError:
-                pass  # Navigating away ends the call anyway.
+            self._press(build_click_script(hangup_texts, fill_name=False))
             time.sleep(0.6)
         return self.go_home(reason=reason)
 
@@ -398,24 +565,32 @@ class BrowserService:
         return self._cdp.bring_to_front()
 
     # -- media controls the remote uses ---------------------------------
-    def toggle_meeting_mute(self) -> bool:
-        """Press the meeting page's own mute control, where there is one."""
-        texts = ["Mute microphone", "Unmute microphone", "Mute", "Unmute"]
+    def _press(self, script: str, *, timeout: float = 6.0) -> bool:
+        """Run one click pass. True if something was actually pressed."""
         try:
-            raw = self._cdp.evaluate(build_click_script(texts, fill_name=False), timeout=6.0)
-            payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
-            return bool((payload or {}).get("clicked"))
+            raw = self._cdp.evaluate(script, timeout=timeout)
+            payload = (json.loads(raw) if isinstance(raw, str) else raw) or {}
+            return bool(payload.get("clicked"))
         except (CDPError, TypeError, ValueError):
             return False
 
+    def toggle_meeting_mute(self) -> bool:
+        """Press the meeting page's own mute control, where there is one."""
+        texts = ["Mute microphone", "Unmute microphone", "Mute", "Unmute"]
+        return self._press(build_click_script(texts, fill_name=False))
+
+    def mute_meeting_microphone(self) -> bool:
+        """Mute — never toggle — the meeting page's microphone control.
+
+        "Mute" is a substring of "Unmute", so a plain text match cheerfully
+        unmutes a room that was already quiet. build_mute_script() carries the
+        deny list that makes this one-way, which is what "join muted" needs.
+        """
+        return self._press(build_mute_script())
+
     def toggle_meeting_camera(self) -> bool:
         texts = ["Turn camera on", "Turn camera off", "Start video", "Stop video", "Camera"]
-        try:
-            raw = self._cdp.evaluate(build_click_script(texts, fill_name=False), timeout=6.0)
-            payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
-            return bool((payload or {}).get("clicked"))
-        except (CDPError, TypeError, ValueError):
-            return False
+        return self._press(build_click_script(texts, fill_name=False))
 
     # -- recovery --------------------------------------------------------
     def restart_browser(self, *, reason: str = "") -> bool:

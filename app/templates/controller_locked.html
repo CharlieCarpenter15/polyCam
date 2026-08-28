@@ -1,0 +1,78 @@
+{#
+  The friendly dead end for the room controller.
+
+  Reached when a phone opens /controller without having scanned the room's
+  code — usually a bookmark from a previous visit, or a phone whose session
+  expired. It says how to get in and nothing else: standalone like the
+  controller itself, with no route to the admin pages.
+#}
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark light">
+  <title>Control {{ room_name }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="{{ url_for('static', filename='controller.css') }}">
+  <style>:root { --accent: {{ accent }}; }</style>
+</head>
+<body class="controller" data-csrf="{{ csrf }}">
+
+  <header class="head">
+    <div class="head-room">
+      <p class="head-eyebrow">Room controller</p>
+      <h1 class="head-name">{{ room_name }}</h1>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <section class="hero">
+      <div class="hero-status">
+        <h2 class="hero-mode">Scan the code on the TV</h2>
+        <p class="hero-hint">
+          This page only works from inside the room, so it asks you to scan the
+          little square code in the corner of the TV screen first.
+        </p>
+      </div>
+
+      <ol class="steps">
+        <li class="step"><span class="step-n">1</span> Look at the TV in this room. The code is in a corner of the screen.</li>
+        <li class="step"><span class="step-n">2</span> Open your phone's camera and point it at the code.</li>
+        <li class="step"><span class="step-n">3</span> Tap the link your phone offers. The controls open straight away.</li>
+      </ol>
+    </section>
+
+    {% if pin_required %}
+      <section class="card">
+        <h2 class="card-title">This room also asks for a PIN</h2>
+        <p class="card-note card-note-top">
+          As well as the code on the TV, this room is set to ask for the admin
+          PIN before anyone can control it. Enter it once and the controls open.
+        </p>
+        <a class="wide wide-accent" href="{{ url_for('login', next='/controller') }}">Enter the room PIN</a>
+      </section>
+    {% endif %}
+
+    <section class="card">
+      <h2 class="card-title">If there is no code on the TV</h2>
+      <p class="card-note card-note-top">
+        The code may be switched off, or the TV may be showing a meeting rather
+        than the room dashboard. Ask whoever looks after this room — they can
+        turn the code back on, or read out the room's address for you.
+      </p>
+      <a class="wide" href="{{ url_for('controller_page') }}">Try again</a>
+    </section>
+
+    <footer class="foot">
+      <p class="foot-line">{{ room_name }}</p>
+      <p class="foot-line foot-version">Room software {{ version }}</p>
+    </footer>
+
+  </main>
+
+</body>
+</html>

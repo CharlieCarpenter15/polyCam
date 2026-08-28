@@ -18,10 +18,25 @@ be guaranteed to keep working. The design therefore assumes it *will* break:
 
 The injected JavaScript searches the document, open shadow roots and same-origin
 iframes, ignores hidden elements, and clicks at most one button per pass.
+
+Three things the clicker deliberately does *not* do, each of which caused a real
+room to misbehave:
+
+* It never fills a name and clicks Join in the same pass. The Join button is
+  disabled until the page has processed the name, so the click is either wasted
+  on a disabled button or lands early and bounces the room back to the pre-join
+  screen. Filling returns straight away; the next pass does the clicking.
+* It never presses a button the caller has told it to leave alone
+  (``guarded_clicks``), which is how the repeat guard stops the room pressing
+  "Join now" over and over on a page that is simply slow.
+* It never clicks while the page says the room is in the lobby. Waiting to be
+  admitted is success in progress, not a failure to click harder.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 # ---------------------------------------------------------------------------
@@ -34,14 +49,20 @@ from dataclasses import dataclass, field
 #  * Buttons are ranked so a "pre-join" step (e.g. "Continue on this browser")
 #    is taken before a "join" step, and destructive-looking text is never
 #    matched because it is simply not in the list.
+#  * Everything is ES5: this runs in whatever Chromium the Pi happens to have.
 _CLICKER_JS = r"""
 (function () {
   var WANTED = __PATTERNS__;
+  var AVOID = __AVOID__;
+  var GUARDED = __GUARDED__;
   var NAME = __NAME__;
   var FILL_NAME = __FILL_NAME__;
 
   function norm(s) {
-    return (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+    // Providers use typographic apostrophes ("you'll join when..."), so fold
+    // them to ASCII before any comparison.
+    return (s || "").replace(/[‘’]/g, "'")
+                    .replace(/\s+/g, " ").trim().toLowerCase();
   }
 
   function visible(el) {
@@ -65,6 +86,12 @@ _CLICKER_JS = r"""
                   el.getAttribute("title") || el.value));
     }
     return text;
+  }
+
+  function dispatch(el, type) {
+    try {
+      el.dispatchEvent(new Event(type, { bubbles: true }));
+    } catch (e) { /* ignore */ }
   }
 
   // Gather candidate elements from a root, following shadow DOM and iframes.
@@ -91,42 +118,177 @@ _CLICKER_JS = r"""
     }
   }
 
-  // Optionally fill a "your name" box so a guest join can proceed.
-  function fillName(root, depth) {
-    if (!FILL_NAME || !NAME) return false;
-    var inputs;
+  // -- the guest name box ---------------------------------------------------
+  //
+  // Only "name"-ish fields, never one that already has something in it, and
+  // never anything that smells like a meeting id, passcode or sign-in field:
+  // typing the room name into a passcode box is how an appliance locks itself
+  // out of a meeting.
+  var NAME_BLOCKERS = ["meeting", "code", "passcode", "password", "email"];
+  // "id" and "pin" are too short to match as substrings — "video", "hidden"
+  // and "spinner" all contain one — so they are matched as whole words.
+  var NAME_BLOCKER_WORDS = /(^|[^a-z])(id|pin)([^a-z]|$)/;
+
+  function hintFor(el) {
+    return norm(((el.getAttribute && el.getAttribute("aria-label")) || "") + " " +
+                ((el.getAttribute && el.getAttribute("placeholder")) || "") + " " +
+                ((el.getAttribute && el.getAttribute("title")) || "") + " " +
+                (el.name || "") + " " + (el.id || ""));
+  }
+
+  function looksLikeNameField(hint) {
+    if (!hint || hint.indexOf("name") === -1) return false;
+    for (var i = 0; i < NAME_BLOCKERS.length; i++) {
+      if (hint.indexOf(NAME_BLOCKERS[i]) !== -1) return false;
+    }
+    return !NAME_BLOCKER_WORDS.test(hint);
+  }
+
+  // Assigning to el.value is not enough on a React page (Teams, Meet): React
+  // keeps its own copy of the value on the node, sees no change, and puts the
+  // old empty value back — leaving Join greyed out and the room parked on the
+  // pre-join screen, asking for a name every time. Writing through the
+  // prototype's native setter is what makes the framework notice.
+  function setInputValue(el, text) {
+    var setter = null;
     try {
-      inputs = root.querySelectorAll('input[type="text"], input:not([type]), input[type="search"]');
-    } catch (e) { return false; }
-    for (var i = 0; i < inputs.length; i++) {
-      var el = inputs[i];
-      if (!visible(el) || el.value) continue;
-      var hint = norm((el.getAttribute("aria-label") || "") + " " +
-                      (el.placeholder || "") + " " + (el.name || "") + " " + (el.id || ""));
-      if (hint.indexOf("name") === -1) continue;
-      if (hint.indexOf("meeting") !== -1 || hint.indexOf("code") !== -1) continue;
-      try {
-        el.focus();
-        el.value = NAME;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-        return true;
-      } catch (e) { /* ignore */ }
+      var proto = el.tagName === "TEXTAREA"
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      var descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+      if (descriptor && descriptor.set) setter = descriptor.set;
+    } catch (e) { /* an engine without the descriptor: fall back below */ }
+    try {
+      if (setter) { setter.call(el, text); } else { el.value = text; }
+    } catch (e) {
+      try { el.value = text; } catch (e2) { return false; }
+    }
+    dispatch(el, "input");
+    dispatch(el, "change");
+    return el.value === text;
+  }
+
+  // Zoom and Webex use a contenteditable div for the name in places.
+  function setEditableText(el, text) {
+    try { el.textContent = text; } catch (e) { return false; }
+    dispatch(el, "input");
+    return norm(el.textContent) === norm(text);
+  }
+
+  // "" nothing to do, "filled" the box now really holds the name, "failed" a
+  // name box was found but the page would not keep the value.
+  function fillName(root, depth) {
+    if (!FILL_NAME || !NAME) return "";
+    var outcome = "";
+    var fields;
+    try {
+      fields = root.querySelectorAll(
+        'input[type="text"], input:not([type]), input[type="search"], textarea, [contenteditable="true"], [contenteditable=""]'
+      );
+    } catch (e) { fields = []; }
+    for (var i = 0; i < fields.length; i++) {
+      var el = fields[i];
+      if (!visible(el)) continue;
+      var editable = el.tagName !== "INPUT" && el.tagName !== "TEXTAREA";
+      if (editable ? norm(el.textContent) : (el.value || "")) continue;
+      if (!looksLikeNameField(hintFor(el))) continue;
+      try { el.focus(); } catch (e) { /* not focusable: still worth writing */ }
+      if (editable ? setEditableText(el, NAME) : setInputValue(el, NAME)) return "filled";
+      outcome = "failed";
     }
     if (depth < 4) {
       var all;
-      try { all = root.querySelectorAll("*"); } catch (e) { return false; }
+      try { all = root.querySelectorAll("*"); } catch (e) { return outcome; }
       for (var k = 0; k < all.length; k++) {
-        if (all[k].shadowRoot && fillName(all[k].shadowRoot, depth + 1)) return true;
+        var host = all[k];
+        var nested = "";
+        if (host.shadowRoot) {
+          nested = fillName(host.shadowRoot, depth + 1);
+        } else if (host.tagName === "IFRAME") {
+          try {
+            if (host.contentDocument) nested = fillName(host.contentDocument, depth + 1);
+          } catch (e) { nested = ""; }
+        }
+        if (nested === "filled") return "filled";
+        if (nested === "failed") outcome = "failed";
       }
+    }
+    return outcome;
+  }
+
+  // -- the lobby ------------------------------------------------------------
+  //
+  // Once the room has asked to be let in, pressing anything else is noise: the
+  // host has to act, and clicking "Ask to join" again can restart the wait.
+  var LOBBY = [
+    "asking to be let in",
+    "waiting to be admitted",
+    "waiting for the host",
+    "wait for the host",
+    "waiting for the meeting to start",
+    "when someone lets you in",
+    "someone lets you in",
+    "let you in soon",
+    "lets you in soon",
+    "in the waiting room"
+  ];
+
+  function pageText() {
+    var body;
+    try { body = document.body; } catch (e) { return ""; }
+    if (!body) return "";
+    var text = norm(body.innerText || body.textContent);
+    return text.length > 20000 ? text.slice(0, 20000) : text;
+  }
+
+  function lobbyPhrase() {
+    var text = pageText();
+    if (!text) return "";
+    for (var i = 0; i < LOBBY.length; i++) {
+      if (text.indexOf(LOBBY[i]) !== -1) return LOBBY[i];
+    }
+    // "Please wait" alone is far too common to trust; only believe it next to
+    // something about joining.
+    if (text.indexOf("please wait") !== -1 &&
+        (text.indexOf("host") !== -1 || text.indexOf("join") !== -1 ||
+         text.indexOf("admit") !== -1 || text.indexOf("let you in") !== -1)) {
+      return "please wait";
+    }
+    return "";
+  }
+
+  // -- what may be pressed --------------------------------------------------
+  function avoided(text) {
+    for (var a = 0; a < AVOID.length; a++) {
+      var term = norm(AVOID[a]);
+      if (term && text.indexOf(term) !== -1) return true;
     }
     return false;
   }
 
-  var namedFilled = fillName(document, 0);
+  function guarded(text) {
+    for (var g = 0; g < GUARDED.length; g++) {
+      var entry = GUARDED[g];
+      if (!entry || norm(entry.text) !== text) continue;
+      // A new page means a new button: the guard only holds while the room is
+      // still looking at the URL it clicked on.
+      if (!entry.url || entry.url === location.href) return true;
+    }
+    return false;
+  }
+
+  var filled = fillName(document, 0) === "filled";
+  var waiting = lobbyPhrase();
 
   var candidates = [];
   collect(document, candidates, 0);
+
+  // Filling the name and pressing Join in the same pass is a race the room
+  // loses; so is pressing anything at all while waiting to be admitted.
+  if (filled || waiting) {
+    return JSON.stringify({ clicked: null, filled_name: filled, waiting: waiting,
+                            candidates: candidates.length, url: location.href });
+  }
 
   var best = null, bestRank = 1e9, bestText = "";
   for (var i = 0; i < candidates.length; i++) {
@@ -134,6 +296,7 @@ _CLICKER_JS = r"""
     if (!visible(el)) continue;
     var text = label(el);
     if (!text || text.length > 80) continue;
+    if (avoided(text) || guarded(text)) continue;
     for (var w = 0; w < WANTED.length; w++) {
       var want = norm(WANTED[w]);
       if (!want) continue;
@@ -147,7 +310,7 @@ _CLICKER_JS = r"""
   }
 
   if (!best) {
-    return JSON.stringify({ clicked: null, filled_name: namedFilled,
+    return JSON.stringify({ clicked: null, filled_name: false, waiting: "",
                             candidates: candidates.length, url: location.href });
   }
   try {
@@ -156,28 +319,39 @@ _CLICKER_JS = r"""
   try {
     best.click();
   } catch (e) {
-    return JSON.stringify({ clicked: null, error: String(e), url: location.href });
+    return JSON.stringify({ clicked: null, filled_name: false, waiting: "",
+                            candidates: candidates.length, error: String(e),
+                            url: location.href });
   }
-  return JSON.stringify({ clicked: bestText, filled_name: namedFilled,
+  return JSON.stringify({ clicked: bestText, filled_name: false, waiting: "",
                           candidates: candidates.length, url: location.href });
 })()
 """
 
-# A tiny probe used to decide whether the room is already in the meeting: the
-# presence of a leave/hang-up control is the most reliable cross-provider signal.
+# A probe used to decide whether the room is already in the meeting. A
+# leave/hang-up control is the most reliable cross-provider signal; the rest are
+# things that only ever appear once the call is up, so automation stops promptly
+# instead of clicking around inside a live meeting.
 _IN_CALL_JS = r"""
 (function () {
-  function norm(s) { return (s || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+  function norm(s) {
+    return (s || "").replace(/[‘’]/g, "'")
+                    .replace(/\s+/g, " ").trim().toLowerCase();
+  }
   var HINTS = ["leave call", "leave meeting", "leave (", "hang up", "end call",
-               "end meeting", "leave now"];
+               "end meeting", "leave now", "leave the call", "leave the meeting",
+               "end the call", "end the meeting", "end meeting for all",
+               "end call for all", "hang up call", "disconnect call",
+               "you're the only one here", "no one else is here"];
   var nodes;
   try {
-    nodes = document.querySelectorAll('button, [role="button"], [aria-label]');
+    nodes = document.querySelectorAll('button, [role="button"], [aria-label], [title]');
   } catch (e) { return "false"; }
-  for (var i = 0; i < nodes.length; i++) {
+  for (var i = 0; i < nodes.length && i < 4000; i++) {
     var el = nodes[i];
     var text = norm(el.innerText || el.textContent || "") + " " +
-               norm(el.getAttribute && el.getAttribute("aria-label"));
+               norm(el.getAttribute && el.getAttribute("aria-label")) + " " +
+               norm(el.getAttribute && el.getAttribute("title"));
     for (var h = 0; h < HINTS.length; h++) {
       if (text.indexOf(HINTS[h]) !== -1) return "true";
     }
@@ -185,6 +359,26 @@ _IN_CALL_JS = r"""
   return "false";
 })()
 """
+
+#: Controls that mute the microphone, most specific first.
+MUTE_BUTTON_TEXTS: tuple[str, ...] = (
+    "Mute microphone",
+    "Turn off microphone",
+    "Mute my microphone",
+    "Mute mic",
+    "Mute audio",
+    "Mute",
+)
+
+#: ...and what must never be pressed while doing it. "Mute" is a substring of
+#: "Unmute", so without this list a page that is already muted gets unmuted —
+#: which is the opposite of joining quietly.
+MUTE_AVOID_TEXTS: tuple[str, ...] = (
+    "unmute",
+    "turn on microphone",
+    "turn on mic",
+    "start audio",
+)
 
 
 @dataclass(frozen=True)
@@ -274,20 +468,40 @@ def build_click_script(
     *,
     display_name: str = "",
     fill_name: bool = False,
+    avoid_texts: Iterable[str] = (),
+    guarded_clicks: Iterable[tuple[str, str]] = (),
 ) -> str:
-    """Render the clicker with the given button texts."""
-    import json as _json
+    """Render the clicker with the given button texts.
 
+    ``avoid_texts`` are never pressed, whatever they match — that is what turns
+    a "Mute" match into a mute rather than a toggle. ``guarded_clicks`` are
+    ``(button text, page URL)`` pairs the room pressed a moment ago: each is
+    skipped while the page is still on that URL, so a slow meeting page is not
+    pressed over and over.
+    """
     patterns = [str(t).strip() for t in button_texts if str(t).strip()]
+    avoid = [str(t).strip() for t in avoid_texts if str(t).strip()]
+    guarded = [
+        {"text": str(text), "url": str(url or "")}
+        for text, url in guarded_clicks
+        if str(text).strip()
+    ]
     return (
-        _CLICKER_JS.replace("__PATTERNS__", _json.dumps(patterns))
-        .replace("__NAME__", _json.dumps(display_name or ""))
+        _CLICKER_JS.replace("__PATTERNS__", json.dumps(patterns))
+        .replace("__AVOID__", json.dumps(avoid))
+        .replace("__GUARDED__", json.dumps(guarded))
+        .replace("__NAME__", json.dumps(display_name or ""))
         .replace("__FILL_NAME__", "true" if fill_name else "false")
     )
 
 
 def build_in_call_script() -> str:
     return _IN_CALL_JS
+
+
+def build_mute_script() -> str:
+    """A click pass that can only ever mute, never unmute."""
+    return build_click_script(list(MUTE_BUTTON_TEXTS), avoid_texts=MUTE_AVOID_TEXTS)
 
 
 def ordered_button_texts(provider_id: str, configured: list[str]) -> list[str]:

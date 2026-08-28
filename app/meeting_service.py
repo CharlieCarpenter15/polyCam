@@ -17,6 +17,11 @@ Two safety rules matter more than anything clever here:
   its scheduled end plus a grace period; failing that, at a hard maximum;
   failing that, if the meeting vanishes from the calendar entirely.
 * A failure in this loop is caught and logged, and the loop keeps running.
+
+Joining is deliberately idempotent. Every JOIN button in the building ends up in
+:meth:`MeetingService.open_meeting` — the TV, a phone, the Poly remote, the
+scheduled auto-open — and asking for the meeting that is already on screen
+brings the page forward instead of reloading it mid-join.
 """
 
 from __future__ import annotations
@@ -47,6 +52,11 @@ log = get_logger("room")
 #: How often the state machine re-evaluates.
 TICK_SECONDS = 5.0
 
+#: How long the last room-button press is worth showing. The TV and the phone
+#: controller render it as a brief confirmation ("Microphone muted"), so an old
+#: entry is not history, it is a lie about what just happened.
+REMOTE_ACTION_TTL_SECONDS = 15.0
+
 
 @dataclass
 class ActiveMeeting:
@@ -67,6 +77,26 @@ class ActiveMeeting:
             "scheduled_end": self.scheduled_end.isoformat(),
             "opened_at": self.opened_at.isoformat(),
             "opened_manually": self.opened_manually,
+        }
+
+
+@dataclass
+class RemoteAction:
+    """The most recent room-button press, for the TV and the phone controller."""
+
+    action: str
+    detail: str
+    ok: bool
+    at: datetime
+    source: str = "remote"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "action": self.action,
+            "detail": self.detail,
+            "ok": self.ok,
+            "at": self.at.isoformat(),
+            "source": self.source,
         }
 
 
@@ -102,7 +132,14 @@ class MeetingService:
         self.system = system
 
         self._lock = threading.RLock()
+        # Held for the whole of open_meeting so two callers — the TV, a phone,
+        # the scheduled auto-open — cannot both navigate the browser.
+        self._open_lock = threading.Lock()
         self._state = RoomState()
+        self._last_remote: RemoteAction | None = None
+        # The meeting page never says which way its camera control went, so the
+        # room keeps its own idea of it, purely to word the confirmation.
+        self._camera_on = True
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._network_ok = True
@@ -299,38 +336,79 @@ class MeetingService:
             )
         return ""
 
+    def _reopen_window(self) -> timedelta:
+        """How long a meeting counts as "already open".
+
+        The auto-join timeout is the honest answer: while the automation is
+        still working through the pre-join screens, navigating again throws all
+        of that away and starts the sign-in over — which is what people in the
+        room describe as "it logs in several times". Once the automation has
+        given up, a fresh navigation is a reasonable way to try again. Floored
+        at 30 seconds so a short configured timeout still covers someone
+        pressing JOIN on the TV and then on their phone.
+        """
+        return timedelta(
+            seconds=max(30.0, float(self.config.int_("AUTO_JOIN_TIMEOUT_SECONDS")))
+        )
+
+    def _already_open(self, meeting: Meeting) -> bool:
+        with self._lock:
+            active = self._state.active
+        if active is None or active.meeting_id != meeting.uid:
+            return False
+        return datetime.now(self.config.tz()) - active.opened_at < self._reopen_window()
+
     def open_meeting(self, meeting: Meeting, *, manual: bool = True) -> bool:
-        """Put the TV into a meeting."""
+        """Put the TV into a meeting.
+
+        Idempotent on purpose. JOIN on the TV, JOIN on a phone, the Poly remote
+        and the scheduled auto-open all arrive here, often within seconds of one
+        another. Re-navigating would reload the meeting page mid-join, so a
+        request for the meeting already on screen just brings it to the front
+        and reports success. Someone who genuinely wants another go has
+        ``retry_join_automation()``, which re-runs the buttons without
+        reloading the page.
+        """
         if not meeting.has_link:
             return False
 
-        # Clear a mirroring session so the meeting is actually visible.
-        if self.airplay.sharing:
-            self.airplay.force_stop_sharing()
+        with self._open_lock:
+            if self._already_open(meeting):
+                self.browser.bring_to_front()
+                log_event(
+                    log, logging.DEBUG, "meeting.join_already_open",
+                    provider=meeting.provider_id or "unknown", manual=manual,
+                )
+                return True
 
-        ok = self.browser.open_meeting(
-            meeting, reason="pressed Join" if manual else "scheduled start"
-        )
-        if not ok:
-            return False
+            # Clear a mirroring session so the meeting is actually visible.
+            if self.airplay.sharing:
+                self.airplay.force_stop_sharing()
 
-        tz = self.config.tz()
-        active = ActiveMeeting(
-            meeting_id=meeting.uid,
-            title=meeting.title,
-            provider_id=meeting.provider_id,
-            scheduled_end=meeting.end,
-            opened_at=datetime.now(tz),
-            opened_manually=manual,
-        )
-        with self._lock:
-            self._state.active = active
-            self._state.mode = MODE_MEETING
-        self._opened_meeting_ids.add(meeting.uid)
-        # Keep the "already opened" set from growing without bound.
-        if len(self._opened_meeting_ids) > 200:
-            self._opened_meeting_ids = set(list(self._opened_meeting_ids)[-100:])
-        self._record_action(f"opened {meeting.provider_name or 'meeting'}")
+            ok = self.browser.open_meeting(
+                meeting, reason="pressed Join" if manual else "scheduled start"
+            )
+            if not ok:
+                return False
+
+            tz = self.config.tz()
+            active = ActiveMeeting(
+                meeting_id=meeting.uid,
+                title=meeting.title,
+                provider_id=meeting.provider_id,
+                scheduled_end=meeting.end,
+                opened_at=datetime.now(tz),
+                opened_manually=manual,
+            )
+            with self._lock:
+                self._state.active = active
+                self._state.mode = MODE_MEETING
+            self._camera_on = True
+            self._opened_meeting_ids.add(meeting.uid)
+            # Keep the "already opened" set from growing without bound.
+            if len(self._opened_meeting_ids) > 200:
+                self._opened_meeting_ids = set(list(self._opened_meeting_ids)[-100:])
+            self._record_action(f"opened {meeting.provider_name or 'meeting'}")
 
         log_event(
             log, logging.INFO, "meeting.upcoming_detected" if not manual else "meeting.join_requested",
@@ -394,18 +472,32 @@ class MeetingService:
         return self.browser.retry_join()
 
     # -- remote button actions -------------------------------------------
-    def dispatch_action(self, action: str) -> dict[str, object]:
-        """Handle an action from the Poly remote or the control panel."""
-        action = (action or "").strip().lower()
+    def dispatch_action(self, action: str, *, source: str = "remote") -> dict[str, object]:
+        """Handle an action from the Poly remote, the TV or a phone.
 
+        Every branch returns a ``detail`` sentence. The same words go back to
+        whoever pressed the button and into ``dashboard_payload()["remote"]``,
+        so the phone that pressed mute and the TV across the room tell the same
+        story. ``source`` says which of them it was.
+        """
+        action = (action or "").strip().lower()
+        result = self._perform_action(action)
+        self._record_remote_action(action, result, source=source)
+        return result
+
+    def _perform_action(self, action: str) -> dict[str, object]:
         if action == "join":
             ok, detail = self.join_next()
-            return {"ok": ok, "detail": detail}
+            return {"ok": ok, "detail": f"Joining {detail}" if ok else detail}
         if action in ("hangup", "leave"):
-            return {"ok": self.leave_meeting(reason="remote hang-up"), "detail": "left"}
+            ok = self.leave_meeting(reason="remote hang-up")
+            return {
+                "ok": ok,
+                "detail": "Left the meeting" if ok else "There was no meeting to leave",
+            }
         if action == "home":
             self.go_home(reason="remote home button")
-            return {"ok": True, "detail": "dashboard"}
+            return {"ok": True, "detail": "Showing the room dashboard"}
         if action == "mute":
             # Mute the microphone at the OS level, and in the meeting page too so
             # the on-screen indicator agrees with reality.
@@ -414,17 +506,61 @@ class MeetingService:
                 in_meeting = self._state.active is not None
             if in_meeting:
                 self.browser.toggle_meeting_mute()
-            return {"ok": muted is not None, "muted": muted}
-        if action == "volume_up":
-            level = self.poly.adjust_volume(self.config.int_("POLY_VOLUME_STEP"))
-            return {"ok": level is not None, "volume": level}
-        if action == "volume_down":
-            level = self.poly.adjust_volume(-self.config.int_("POLY_VOLUME_STEP"))
-            return {"ok": level is not None, "volume": level}
+            if muted is None:
+                return {"ok": False, "muted": None, "detail": "No microphone is available"}
+            return {
+                "ok": True,
+                "muted": muted,
+                "detail": "Microphone muted" if muted else "Microphone on",
+            }
+        if action in ("volume_up", "volume_down"):
+            step = self.config.int_("POLY_VOLUME_STEP")
+            level = self.poly.adjust_volume(step if action == "volume_up" else -step)
+            return {
+                "ok": level is not None,
+                "volume": level,
+                "detail": f"Volume {level}%" if level is not None else "No speaker is available",
+            }
         if action == "camera":
-            return {"ok": self.browser.toggle_meeting_camera()}
+            pressed = bool(self.browser.toggle_meeting_camera())
+            if pressed:
+                self._camera_on = not self._camera_on
+            if not pressed:
+                return {"ok": False, "detail": "No camera control on this page"}
+            return {
+                "ok": True,
+                "detail": "Camera turned on" if self._camera_on else "Camera turned off",
+            }
 
         return {"ok": False, "detail": f"Unknown action: {action}"}
+
+    def _record_remote_action(
+        self, action: str, result: dict[str, object], *, source: str
+    ) -> None:
+        if not action:
+            return
+        detail = str(result.get("detail") or "")
+        with self._lock:
+            self._last_remote = RemoteAction(
+                action=action,
+                detail=detail,
+                ok=bool(result.get("ok")),
+                at=datetime.now(self.config.tz()),
+                source=source or "remote",
+            )
+        self._record_action(detail or action)
+
+    def recent_remote_action(self, now: datetime | None = None) -> dict[str, object] | None:
+        """The last button press, or None once it is too old to show."""
+        with self._lock:
+            recent = self._last_remote
+        if recent is None:
+            return None
+        now = now or datetime.now(self.config.tz())
+        age = (now - recent.at).total_seconds()
+        if age < 0 or age > REMOTE_ACTION_TTL_SECONDS:
+            return None
+        return recent.to_dict()
 
     # -- data for the UI -------------------------------------------------
     def dashboard_payload(self) -> dict[str, object]:
@@ -471,6 +607,7 @@ class MeetingService:
                 "source": snapshot.source,
                 "age_seconds": round(snapshot.age_seconds) if snapshot.age_seconds is not None else None,
             },
+            "remote": self.recent_remote_action(now),
             "airplay": self.airplay.status(),
             "network_ok": network_ok,
             "setup_required": self.config.setup_required(),
