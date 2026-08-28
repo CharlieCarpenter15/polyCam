@@ -304,8 +304,31 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "components": health["components"],
         }
         payload["panel_url"] = _panel_url()
+        payload["setup"] = _setup_hint()
         payload["version"] = __version__
         return jsonify(payload)
+
+    def _setup_hint() -> dict[str, Any]:
+        """What the first-run overlay on the TV should say.
+
+        The admin PIN is included ONLY for a request from the Pi itself. The
+        dashboard is deliberately viewable read-only from the LAN, so putting
+        the PIN in the general payload would turn /api/state into a way to read
+        it without ever signing in. The kiosk browser is on 127.0.0.1, so it
+        gets it; nobody else does.
+
+        It is also only useful while setup is unfinished — the overlay stops
+        being shown the moment a calendar is configured — which keeps the PIN
+        on screen for a short, purposeful window rather than permanently.
+        """
+        if not config.setup_required():
+            return {"required": False}
+
+        lan = config.bool_("ADMIN_LAN_ACCESS")
+        hint: dict[str, Any] = {"required": True, "lan": lan}
+        if lan and is_local_request():
+            hint["pin"] = config.str_("ADMIN_PIN")
+        return hint
 
     @app.route("/api/health")
     def api_health():

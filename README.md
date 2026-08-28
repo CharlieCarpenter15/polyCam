@@ -99,7 +99,11 @@ When it finishes you will see something like:
      PIN: 481920
 ```
 
-Write the PIN down. Then finish setup from your phone, and reboot:
+The TV shows the same address and PIN on its "Finish setting up this room"
+screen until a calendar is configured, so you do not have to write it down —
+and it disappears from the screen as soon as setup is done.
+
+Then finish setup from your phone, and reboot:
 
 ```bash
 sudo reboot
@@ -478,6 +482,22 @@ kiosk waits up to 90 seconds and retries by itself. Check the Pi is set to boot
 to **Desktop with autologin** (`sudo raspi-config` → System Options → Boot /
 Auto Login).
 
+### I have lost the admin PIN
+
+While the room is still unconfigured it is on the TV, on the "Finish setting up
+this room" screen. Otherwise read it back on the Pi:
+
+```bash
+./scripts/roomctl get ADMIN_PIN
+```
+
+Note that `./scripts/roomctl config` deliberately masks it as `********`; `get`
+returns the real value. To set a new one:
+
+```bash
+./scripts/roomctl pin 246813
+```
+
 ### The dashboard shows "No calendar connected yet"
 
 The calendar link is missing or wrong. Settings → Calendar. To test the link:
@@ -850,6 +870,10 @@ The appliance sits on an office network in a shared room, so:
   code, which looks harmless but *is* the key to the meeting.
 - **Meeting URLs never reach the browser.** The dashboard joins by meeting id,
   so a link cannot appear in page source or in a screenshot.
+- **The admin PIN is shown on the TV only during first-run setup**, and only to
+  the kiosk: `/api/state` includes it solely for requests from `127.0.0.1`, so a
+  LAN client that can view the dashboard cannot read it. It stops being sent the
+  moment a calendar is configured.
 - **Uploads are validated by content**, not filename, and are served by exact
   match against the directory listing, so no crafted name can escape it.
 - **A tight sudo rule.** The room account may reboot. That is all:

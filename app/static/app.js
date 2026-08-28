@@ -348,7 +348,24 @@
 
     var setup = !!payload.setup_required && !sharing;
     show($("overlay-setup"), setup);
-    if (setup) setText("setup-url", payload.panel_url || "");
+    if (!setup) return;
+
+    setText("setup-url", payload.panel_url || "");
+
+    // The PIN only reaches this page when the request came from the Pi itself
+    // (see _setup_hint in main.py), so if it is here it is safe to display.
+    var info = payload.setup || {};
+    var pin = info.pin || "";
+    show($("setup-pin-row"), !!pin);
+    if (pin) setText("setup-pin", pin);
+
+    setText(
+      "setup-hint",
+      info.lan === false
+        ? "Settings are limited to this Raspberry Pi. To set the room up from a "
+          + "phone, run:  roomctl lan-admin on 123456"
+        : "Add the room calendar link and this screen will start showing meetings."
+    );
   }
 
   function renderFooter(payload) {

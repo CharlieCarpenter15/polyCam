@@ -404,6 +404,68 @@ class TestRemoteAccess:
         assert response.status_code == 401
 
 
+class TestSetupOverlay:
+    """The first-run screen on the TV, and the PIN it shows.
+
+    The dashboard is deliberately viewable read-only from the LAN, so the PIN
+    must reach the kiosk and nothing else — otherwise /api/state becomes a way
+    to read it without ever signing in.
+    """
+
+    @pytest.fixture()
+    def fresh_room(self, mock_config):
+        """A room that has not been set up yet, with LAN admin enabled."""
+        mock_config.update(
+            {
+                "CALENDAR_SOURCE": "ics",
+                "CALENDAR_ICS_URL": "",
+                "ADMIN_PIN": "728104",
+                "ADMIN_LAN_ACCESS": True,
+            }
+        )
+        assert mock_config.setup_required()
+        return mock_config
+
+    def test_the_kiosk_is_told_the_pin(self, client, fresh_room):
+        setup = client.get("/api/state").get_json()["setup"]
+        assert setup["required"] is True
+        assert setup["pin"] == "728104"
+
+    def test_a_lan_client_is_not_told_the_pin(self, client, fresh_room):
+        setup = client.get(
+            "/api/state", environ_overrides={"REMOTE_ADDR": "192.168.1.50"}
+        ).get_json()["setup"]
+        assert setup["required"] is True
+        assert "pin" not in setup, "the PIN must never leave the Pi"
+
+    def test_a_forwarded_header_cannot_obtain_the_pin(self, client, fresh_room):
+        setup = client.get(
+            "/api/state",
+            environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+            headers={"X-Forwarded-For": "127.0.0.1"},
+        ).get_json()["setup"]
+        assert "pin" not in setup
+
+    def test_the_pin_stops_being_sent_once_setup_is_done(self, client, fresh_room):
+        fresh_room.update({"CALENDAR_ICS_URL": "https://example.com/room.ics"})
+        setup = client.get("/api/state").get_json()["setup"]
+        assert setup == {"required": False}
+
+    def test_no_pin_is_shown_when_the_panel_is_local_only(self, client, mock_config):
+        """With LAN admin off, a PIN is irrelevant — showing one would confuse."""
+        mock_config.update(
+            {"CALENDAR_SOURCE": "ics", "CALENDAR_ICS_URL": "", "ADMIN_PIN": "728104"}
+        )
+        setup = client.get("/api/state").get_json()["setup"]
+        assert setup["required"] is True and setup["lan"] is False
+        assert "pin" not in setup
+
+    def test_the_overlay_markup_has_somewhere_to_put_the_pin(self, client):
+        body = client.get("/").get_data(as_text=True)
+        assert 'id="setup-pin"' in body
+        assert 'id="setup-pin-row"' in body
+
+
 class TestBinding:
     def test_the_server_stays_local_by_default(self, mock_config):
         from app.web_security import effective_bind_host

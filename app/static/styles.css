@@ -509,6 +509,36 @@ html[data-theme="light"] .overlay { background: rgba(238, 241, 246, 0.96); }
   color: var(--accent);
 }
 
+.setup-pin {
+  margin: 1.6vw 0 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1.2vw;
+  padding: 0.9vw 2.2vw;
+  border: 1px solid var(--border);
+  border-radius: 0.8vw;
+  background: var(--panel);
+}
+
+.setup-pin-label {
+  font-size: 1.2vw;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.setup-pin-value {
+  font-size: 3.2vw;
+  font-weight: 600;
+  /* Tabular figures so the digits do not shuffle, and generous tracking so a
+     PIN can be read and typed correctly from across the room. */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.22em;
+  color: var(--text);
+  font-family: "SF Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+}
+
 .setup-url {
   margin: 1.4vw 0 0;
   font-size: 3.6vw;
