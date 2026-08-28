@@ -44,10 +44,11 @@ from .transcript import (
 )
 
 #: A roster sample taken this long before or after a segment still counts as
-#: describing it. The sampler runs every couple of seconds and a speaker
-#: highlight lags the voice slightly, so a little slack recovers turns that
-#: would otherwise fall between two samples.
-SAMPLE_SLACK_SECONDS = 1.5
+#: describing it. Small, because the sampler is not a poll: an observer inside
+#: the page notices the change itself within a quarter of a second and records
+#: it. This is here only to cover the lag between somebody starting to speak
+#: and the meeting window lighting up their tile.
+SAMPLE_SLACK_SECONDS = 0.5
 
 #: A remote segment must overlap a speaker's span by at least this fraction of
 #: its own length before the name is applied. Without it, a one-word
@@ -59,9 +60,15 @@ MIN_OVERLAP_FRACTION = 0.34
 #: because it reads like a fact.
 _NOT_A_PERSON = re.compile(
     r"^(you|unknown|guest|participant|caller|meeting room|conference room|"
-    r"room system|iphone|ipad|android|unknown user|anonymous)$",
+    r"room system|iphone|ipad|android|unknown user|anonymous|merged audio|"
+    r"presenter|everyone)$",
     re.IGNORECASE,
 )
+
+#: Somebody who dialled in and whose name the meeting app never learned. A
+#: telephone number is not a name, and putting one in front of a line of a
+#: transcript reads like a fact about a person.
+_A_PHONE_NUMBER = re.compile(r"^\+?[\d\s().-]{7,}$")
 
 
 def attribute(
@@ -71,14 +78,22 @@ def attribute(
     voice_labels: Mapping[int, tuple[str, str, float]] | None = None,
     room_people: Sequence[Mapping[str, Any]] = (),
     invited: Sequence[str] = (),
+    room_name: str = "",
 ) -> None:
-    """Label ``written``'s segments and fill in its participant list, in place."""
+    """Label ``written``'s segments and fill in its participant list, in place.
+
+    ``room_name`` is the name this appliance joins meetings under. The meeting
+    window sees the whole room as one participant with that name, so it is
+    filtered out everywhere rather than being treated as a person.
+    """
     voice_labels = voice_labels or {}
     spans = speaking_spans(roster_samples)
 
-    _label_remote(written, spans)
-    _label_room(written, voice_labels, room_people)
-    written.participants = _participants(written, roster_samples, room_people, invited)
+    _label_remote(written, spans, room_name)
+    _label_room(written, voice_labels, room_people, room_name)
+    written.participants = _participants(
+        written, roster_samples, room_people, invited, room_name
+    )
     _fill_participant_emails(written, invited)
 
 
@@ -126,14 +141,18 @@ def _at(s: Any) -> float:
         return 0.0
 
 
-def _label_remote(written: Transcript, spans: Sequence[tuple[float, float, str]]) -> None:
+def _label_remote(
+    written: Transcript,
+    spans: Sequence[tuple[float, float, str]],
+    room_name: str = "",
+) -> None:
     """Name each far-end segment after whoever the meeting window said was talking."""
     if not spans:
         return
     for segment in written.segments:
         if not segment.is_remote:
             continue
-        name, overlap = _best_span(segment, spans)
+        name, overlap = _best_span(segment, spans, room_name)
         if not name:
             continue
         length = max(0.25, segment.duration)
@@ -143,7 +162,9 @@ def _label_remote(written: Transcript, spans: Sequence[tuple[float, float, str]]
 
 
 def _best_span(
-    segment: Segment, spans: Sequence[tuple[float, float, str]]
+    segment: Segment,
+    spans: Sequence[tuple[float, float, str]],
+    room_name: str = "",
 ) -> tuple[str, float]:
     best_name = ""
     best_overlap = 0.0
@@ -152,7 +173,7 @@ def _best_span(
         if overlap > best_overlap:
             best_overlap = overlap
             best_name = name
-    if _is_not_a_person(best_name):
+    if _is_not_a_person(best_name, room_name=room_name):
         return "", 0.0
     return best_name, max(0.0, best_overlap)
 
@@ -166,6 +187,7 @@ def _label_room(
     written: Transcript,
     voice_labels: Mapping[int, tuple[str, str, float]],
     room_people: Sequence[Mapping[str, Any]],
+    room_name: str = "",
 ) -> None:
     """Name the in-room segments from voice profiles, or from an empty room.
 
@@ -181,7 +203,7 @@ def _label_room(
         label = voice_labels.get(index)
         if label:
             name, person_id, score = label
-            if name and not _is_not_a_person(name):
+            if name and not _is_not_a_person(name, room_name=room_name):
                 _apply(segment, name, person_id, SOURCE_VOICE, score)
 
     named = [p for p in room_people if _clean(p.get("name"))]
@@ -201,7 +223,17 @@ def _label_room(
 
 
 def _apply(segment: Segment, name: str, person_id: str, source: str, confidence: float) -> None:
-    """Set a speaker, unless something more trustworthy already did."""
+    """Set a speaker, unless something at least as trustworthy already did.
+
+    "At least as", not "more". Both the captions and the active-speaker
+    highlight come from the meeting window and are therefore ranked the same,
+    but a caption carries the meeting app's own transcription of who said that
+    line, while the highlight is an inference from which tile was lit up at the
+    time. When both have an opinion, whichever spoke first was reading the more
+    direct evidence — so an equal rank leaves the existing answer alone.
+    """
+    if segment.speaker and SOURCE_RANK.get(source, 0) <= SOURCE_RANK.get(segment.source, 0):
+        return
     if SOURCE_RANK.get(source, 0) < SOURCE_RANK.get(segment.source, 0):
         return
     segment.speaker = name
@@ -220,6 +252,7 @@ def _participants(
     roster_samples: Sequence[Any],
     room_people: Sequence[Mapping[str, Any]],
     invited: Sequence[str],
+    room_name: str = "",
 ) -> list[Participant]:
     """Everybody the appliance believes was in the meeting, best evidence first."""
     out: list[Participant] = []
@@ -227,7 +260,7 @@ def _participants(
 
     def add(name: str, *, where: str, source: str, person_id: str = "", email: str = "") -> None:
         clean = _clean(name)
-        if not clean or _is_not_a_person(clean):
+        if not clean or _is_not_a_person(clean, room_name=room_name):
             return
         key = clean.lower()
         if key in seen:
@@ -318,8 +351,14 @@ def _clean(value: Any) -> str:
     return re.sub(r"\s+", " ", text)[:120]
 
 
-def _is_not_a_person(name: str) -> bool:
-    return not name or bool(_NOT_A_PERSON.match(name.strip()))
+def _is_not_a_person(name: str, *, room_name: str = "") -> bool:
+    text = (name or "").strip()
+    if not text or _NOT_A_PERSON.match(text) or _A_PHONE_NUMBER.match(text):
+        return True
+    # The name this appliance joins under is the room itself. Attributing a
+    # line to it would say "somebody in this room said it", which is true and
+    # useless — and reads as though a person called "Boardroom" was speaking.
+    return bool(room_name) and text.casefold() == room_name.strip().casefold()
 
 
 def _score(value: Any) -> float:

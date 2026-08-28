@@ -69,10 +69,16 @@ class FakeBrowser:
         self.install = install
         self.clicked = clicked
         self.scripts: list[str] = []
+        #: Whether each call claimed a user gesture. Only the captions control
+        #: should: the page gates it behind a real interaction, and a reader
+        #: that claimed one every couple of seconds would keep the page
+        #: permanently convinced somebody was using it.
+        self.gestures: list[bool] = []
         self.kinds: list[str] = []
 
-    def read_meeting_page(self, script, *, timeout=6.0):
+    def read_meeting_page(self, script, *, timeout=6.0, user_gesture=False):
         self.scripts.append(script)
+        self.gestures.append(bool(user_gesture))
         kind = script_kind(script)
         self.kinds.append(kind)
         if kind == "install":
@@ -775,7 +781,7 @@ class TestSampler:
                 self.entered = threading.Event()
                 self.release = threading.Event()
 
-            def read_meeting_page(self, script, *, timeout=6.0):
+            def read_meeting_page(self, script, *, timeout=6.0, user_gesture=False):
                 self.entered.set()
                 self.release.wait(timeout=10)
 
@@ -794,7 +800,7 @@ class TestSampler:
 
     def test_a_browser_that_throws_is_survived(self, reading, tmp_path):
         class Exploding:
-            def read_meeting_page(self, script, *, timeout=6.0):
+            def read_meeting_page(self, script, *, timeout=6.0, user_gesture=False):
                 raise RuntimeError("the websocket went away")
 
         sampler = run_sampler(reading, Exploding(), tmp_path, stop_after=3)
@@ -875,6 +881,29 @@ class TestTurningCaptionsOn:
         assert browser.kinds.count("click") == 1, browser.kinds
         assert browser.kinds[0] == "click", "captions go on before the watching starts"
         assert "minutes.roster_captions_requested" in events.names()
+
+    def test_only_the_press_claims_a_user_gesture(self, reading, tmp_path):
+        """A reader must not keep telling the page that somebody is using it.
+
+        The captions control is gated behind a real interaction, so pressing it
+        has to claim one. Every other pass only reads, and claiming a gesture
+        every couple of seconds would leave the page permanently convinced
+        there was a person at the keyboard.
+        """
+        reading.update({"MINUTES_TURN_ON_CAPTIONS": True})
+        browser = FakeBrowser(drains=[drain_payload() for _ in range(4)])
+        run_sampler(reading, browser, tmp_path, stop_after=4).stop()
+
+        by_kind = list(zip(browser.kinds, browser.gestures))
+        assert ("click", True) in by_kind, by_kind
+        assert not any(
+            gesture for kind, gesture in by_kind if kind != "click"
+        ), "a reading pass claimed a user gesture"
+
+    def test_a_reading_only_meeting_never_claims_a_gesture(self, reading, tmp_path):
+        browser = FakeBrowser(drains=[drain_payload() for _ in range(3)])
+        run_sampler(reading, browser, tmp_path, stop_after=3).stop()
+        assert not any(browser.gestures)
 
     def test_a_control_that_is_not_there_is_not_an_error(self, reading, tmp_path):
         reading.update({"MINUTES_TURN_ON_CAPTIONS": True})

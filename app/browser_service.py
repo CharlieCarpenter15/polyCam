@@ -604,22 +604,31 @@ class BrowserService:
         except (CDPError, TypeError, ValueError):
             return False
 
-    def read_meeting_page(self, script: str, *, timeout: float = 6.0) -> Any:
-        """Run a read-only script in the meeting page and return its JSON result.
+    def read_meeting_page(
+        self, script: str, *, timeout: float = 6.0, user_gesture: bool = False
+    ) -> Any:
+        """Run a script in the meeting page and return its JSON result.
 
-        The one door this service opens onto the meeting page for anything other
-        than joining it, added for the meeting-minutes feature so it can read the
-        participant list and captions that Teams, Meet and Zoom already draw on
-        screen. It is deliberately narrow and deliberately timid: it refuses
-        unless a meeting is actually on screen, it presses nothing and navigates
-        nowhere, and it returns ``None`` instead of raising. Something polling a
-        live meeting every couple of seconds must not be able to disturb it, and
-        the only way to guarantee that is for the failure path to be "no answer".
+        The one door this service opens onto a meeting for anything other than
+        joining it, added for the meeting-minutes feature so it can read the
+        participant list and the captions that Teams, Meet and Zoom already draw
+        on screen. Almost everything sent through it only reads, so it claims no
+        user gesture by default; the exception is switching live captions on,
+        which is a control the page gates behind one, and which the feature
+        presses at most once per meeting and only when told to.
+
+        What the door does guarantee is that it cannot make things worse: it
+        refuses unless a meeting is actually on screen, it navigates nowhere,
+        and it returns ``None`` rather than raising. Something polling a live
+        meeting every couple of seconds must not be able to disturb it, and the
+        only way to be sure of that is for every failure to be "no answer".
         """
         if self.target != TARGET_MEETING:
             return None
         try:
-            raw = self._cdp.evaluate(script, timeout=timeout)
+            raw = self._cdp.evaluate(
+                script, timeout=timeout, user_gesture=user_gesture
+            )
         except (CDPError, OSError, ValueError):
             return None
         if isinstance(raw, str):

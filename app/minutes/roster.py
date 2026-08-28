@@ -1511,10 +1511,16 @@ class RosterSampler:
             return "retry"
         return self._consume(payload)
 
-    def _read(self, script: str) -> Any:
-        """``browser.read_meeting_page`` with the last of the belt and braces."""
+    def _read(self, script: str, *, user_gesture: bool = False) -> Any:
+        """``browser.read_meeting_page`` with the last of the belt and braces.
+
+        ``user_gesture`` stays off for every reading pass. Only the captions
+        control needs one, because the page gates it behind a real interaction.
+        """
         try:
-            return self.browser.read_meeting_page(script, timeout=6.0)
+            return self.browser.read_meeting_page(
+                script, timeout=6.0, user_gesture=user_gesture
+            )
         except Exception:  # pragma: no cover - the door is documented never to
             log.exception("minutes.roster_read_failed")
             return None
@@ -1648,7 +1654,7 @@ class RosterSampler:
         through somebody's menus on the room's screen mid-meeting is worse than
         not having captions.
         """
-        payload = self._read(build_captions_script())
+        payload = self._read(build_captions_script(), user_gesture=True)
         pressed = bool(isinstance(payload, dict) and payload.get("clicked"))
         log_event(
             log, logging.INFO, "minutes.roster_captions_requested", pressed=pressed

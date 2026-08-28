@@ -535,6 +535,7 @@ class MinutesService:
             voice_labels=voice_labels,
             room_people=room_people or [],
             invited=meta.invited,
+            room_name=self.config.join_display_name(),
         )
         written.notices = notices
         error = "" if written.segments else (

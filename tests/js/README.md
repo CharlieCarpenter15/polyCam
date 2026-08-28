@@ -39,3 +39,36 @@ node test_clicker.js
 `emit_scripts.py` writes `clicker_teams.js`, `clicker_meet.js`,
 `clicker_guarded.js` (armed with a repeat guard), `clicker_mute.js` and
 `incall.js`. All of them are generated, and all are ignored by git.
+
+---
+
+# Meeting-window DOM tests
+
+`test_roster.js` exercises the JavaScript that `app/minutes/roster.py` injects
+into a live meeting to read who is on the call and, where live captions are on,
+what each of them said. It builds fake Teams / Meet / Zoom meeting stages with
+`jsdom` and asserts that each probe:
+
+* returns the same shape whatever it finds, and `{ok: false, reason}` rather
+  than throwing when it finds nothing
+* never turns a diagnostic string into a speaker's name — an unknown speaker
+  stays unknown, because a confidently wrong name puts words in somebody's mouth
+* never presses anything, with the single exception of the captions control
+* reads names from open shadow roots and same-origin iframes, and survives a
+  cross-origin one
+* holds an interim caption back until the sentence has stopped changing, so the
+  transcript is not full of half-sentences
+* installs its in-page observer only once, keeps its state across a re-install,
+  and tears itself down when the page moves on
+
+Run them on a development machine:
+
+```bash
+cd tests/js
+npm install jsdom
+python3 emit_roster.py      # writes the current roster JS next to the test
+node test_roster.js
+```
+
+`emit_roster.py` writes `clicker_roster_*.js`, which the existing `.gitignore`
+rule already covers.

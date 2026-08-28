@@ -80,6 +80,20 @@ class TestRemoteAttribution:
         attribute(written, roster_samples=[FakeSample(19.5, speaking=["Sam"])])
         assert written.segments[0].speaker == ""
 
+    def test_the_person_who_held_the_floor_wins_a_shared_turn(self):
+        written = make([Segment(0.0, 10.0, "Mostly one person", TRACK_FAR_END)])
+        attribute(
+            written,
+            roster_samples=[
+                FakeSample(0.5, speaking=["Priya"]),
+                FakeSample(2.0, speaking=["Priya"]),
+                FakeSample(4.0, speaking=["Priya"]),
+                FakeSample(6.0, speaking=["Priya"]),
+                FakeSample(8.5, speaking=["Sam"]),
+            ],
+        )
+        assert written.segments[0].speaker == "Priya"
+
     def test_room_speech_is_never_given_a_remote_name(self):
         written = make([Segment(0.0, 5.0, "Over here", TRACK_ROOM)])
         attribute(written, roster_samples=[FakeSample(2.0, speaking=["Priya"])])
@@ -94,8 +108,65 @@ class TestRemoteAttribution:
 
     def test_a_decorated_name_is_tidied(self):
         written = make([Segment(0.0, 5.0, "Hello", TRACK_FAR_END)])
-        attribute(written, roster_samples=[FakeSample(2.0, speaking=["Priya Nair (Guest)"])])
+        attribute(
+            written,
+            roster_samples=[
+                FakeSample(at, speaking=["Priya Nair (Guest)"]) for at in (0.5, 2.0, 4.0)
+            ],
+        )
         assert written.segments[0].speaker == "Priya Nair"
+
+    def test_a_single_sample_does_not_claim_a_long_turn(self):
+        """The observer reports every change, so one sample means a short turn.
+
+        The slack around a sample is small on purpose. A five-second turn that
+        the meeting window only ever mentioned once is not evidence that the
+        named person spoke for five seconds.
+        """
+        written = make([Segment(0.0, 5.0, "A long explanation…", TRACK_FAR_END)])
+        attribute(written, roster_samples=[FakeSample(2.0, speaking=["Priya"])])
+        assert written.segments[0].speaker == ""
+
+    @pytest.mark.parametrize("junk", ["+44 7700 900123", "0800 000 0000", "Merged audio"])
+    def test_a_phone_number_is_not_a_speaker(self, junk):
+        written = make([Segment(0.0, 3.0, "Hello", TRACK_FAR_END)])
+        attribute(
+            written,
+            roster_samples=[FakeSample(at, speaking=[junk]) for at in (0.5, 1.5, 2.5)],
+        )
+        assert written.segments[0].speaker == ""
+
+    def test_the_room_itself_is_not_a_speaker(self):
+        """Every meeting app sees this whole room as one participant."""
+        written = make([Segment(0.0, 3.0, "Hello", TRACK_FAR_END)])
+        attribute(
+            written,
+            roster_samples=[
+                FakeSample(at, participants=["Boardroom", "Priya"], speaking=["Boardroom"])
+                for at in (0.5, 1.5, 2.5)
+            ],
+            room_name="Boardroom",
+        )
+        assert written.segments[0].speaker == ""
+        assert [p.name for p in written.participants] == ["Priya"]
+
+    def test_a_caption_is_not_overwritten_by_the_tile_highlight(self):
+        """Both come from the meeting window, but a caption is the better one.
+
+        Teams and Meet caption a call with their own transcription, which names
+        the speaker of each line directly. The active-speaker highlight is an
+        inference from which tile was lit up. When the two disagree the caption
+        must win, and it used to lose because the ranks are equal.
+        """
+        segment = Segment(0.0, 4.0, "It was me who said this", TRACK_FAR_END)
+        segment.speaker = "Priya"
+        segment.source = SOURCE_ROSTER
+        written = make([segment])
+        attribute(
+            written,
+            roster_samples=[FakeSample(at, speaking=["Sam"]) for at in (0.5, 2.0, 3.5)],
+        )
+        assert written.segments[0].speaker == "Priya"
 
 
 class TestRoomAttribution:

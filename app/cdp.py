@@ -188,8 +188,17 @@ class ChromeDevTools:
         except CDPError:
             return False
 
-    def evaluate(self, expression: str, *, timeout: float = 10.0) -> Any:
-        """Run JavaScript in the page and return the (JSON-able) result."""
+    def evaluate(
+        self, expression: str, *, timeout: float = 10.0, user_gesture: bool = True
+    ) -> Any:
+        """Run JavaScript in the page and return the (JSON-able) result.
+
+        ``user_gesture`` tells the page a person did this, which is what makes a
+        meeting page accept a click on a control it gates behind one. It is the
+        default because the join automation needs it. Pass ``False`` for a
+        script that only reads: claiming a user gesture several times a minute
+        keeps a page permanently convinced somebody is interacting with it.
+        """
         result = self.send(
             "Runtime.evaluate",
             {
@@ -197,7 +206,7 @@ class ChromeDevTools:
                 "returnByValue": True,
                 "awaitPromise": True,
                 # Meeting pages gate some actions on a user gesture.
-                "userGesture": True,
+                "userGesture": bool(user_gesture),
                 "timeout": int(timeout * 1000),
             },
             timeout=timeout + 2,
