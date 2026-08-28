@@ -21,6 +21,8 @@
 #   roomctl pin <digits>               set the admin PIN
 #   roomctl lan-admin on|off           allow settings from the network
 #   roomctl panel                      print the control panel address
+#   roomctl qr                         the phone controller address + code
+#   roomctl qr new                     issue a new pairing code
 #   roomctl reset                      settings back to defaults (keeps calendar)
 #   roomctl reboot
 #   roomctl enable|disable             the whole appliance on/off at boot
@@ -40,7 +42,7 @@ red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 green(){ printf '\033[32m%s\033[0m\n' "$*"; }
 good() { printf '  \033[32m\xe2\x9c\x93\033[0m %s\n' "$*"; }
 
-usage() { sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
 py() {
   local python
@@ -139,6 +141,51 @@ cmd_panel() {
   else
     dim "  http://127.0.0.1:${port}/panel   (this Pi only)"
     dim "  To reach it from a phone:  roomctl lan-admin on"
+  fi
+}
+
+cmd_qr() {
+  room_load_config || true
+  local port enabled lan_admin lan_ctrl address code
+  port="$(room_config DASHBOARD_PORT 8080)"
+  enabled="$(room_config CONTROLLER_ENABLED true)"
+  lan_admin="$(room_config ADMIN_LAN_ACCESS false)"
+  lan_ctrl="$(room_config CONTROLLER_LAN_ACCESS false)"
+
+  bold "Room controller"
+  if ! room_is_true "$enabled"; then
+    dim "  Switched off — Settings → Room controller."
+    return 0
+  fi
+
+  case "${1:-}" in
+    new | rotate | reset)
+      if py -c 'from app.web_security import rotate_controller_token
+rotate_controller_token()' >/dev/null 2>&1; then
+        green "  New code issued. Every phone paired so far must scan again."
+      else
+        red "  Could not issue a new code."
+        return 1
+      fi
+      ;;
+  esac
+
+  code="$(py -c 'from app.web_security import controller_token
+print(controller_token())' 2>/dev/null | tail -n 1)"
+  if [ -z "$code" ]; then
+    red "  Could not read the pairing code (var/controller-token)."
+    return 1
+  fi
+
+  if room_is_true "$lan_admin" || room_is_true "$lan_ctrl"; then
+    address="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$address" ] || address="$(hostname).local"
+    green "  http://${address}:${port}/c/${code}"
+    dim "  This is what the QR code on the TV points at."
+  else
+    dim "  No phone can reach it yet: the room is listening on this Pi only."
+    dim "  Open it up with:  roomctl set CONTROLLER_LAN_ACCESS true"
+    dim "                    roomctl restart backend"
   fi
 }
 
@@ -693,6 +740,7 @@ case "$COMMAND" in
   status | st)       cmd_status ;;
   screen | tv)       cmd_screen ;;
   panel | url)       cmd_panel ;;
+  qr | code)         cmd_qr "$@" ;;
   port)              cmd_port "$@" ;;
   doctor | check)    cmd_doctor ;;
   slow-device | slow) cmd_slow_device "$@" ;;

@@ -26,6 +26,7 @@ PIN checks use a constant-time comparison and are rate-limited per client.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import secrets
@@ -50,7 +51,7 @@ PIN_LOCKOUT_SECONDS = 120.0
 _SECRET_KEY_FILE = paths.VAR_DIR / "flask-secret-key"
 _INTERNAL_TOKEN_FILE = paths.VAR_DIR / "internal-token"
 
-#: Session key marking a phone that scanned the room's QR code.
+#: Session key holding the stamp of the pairing code a phone scanned.
 CONTROLLER_SESSION_KEY = "controller"
 
 
@@ -104,13 +105,24 @@ def controller_token() -> str:
     return _read_or_create_secret(_controller_token_file(), 18)
 
 
+def controller_fingerprint() -> str:
+    """A short, non-reversible stamp of the current pairing code.
+
+    Stored in the phone's session instead of the code itself, and re-checked on
+    every request. That is what makes "New code" mean something: rotating the
+    token changes this stamp, so every phone paired against the old one stops
+    being a controller — a session flag alone would have outlived it.
+    """
+    digest = hashlib.sha256(controller_token().encode("ascii", "ignore")).hexdigest()
+    return digest[:16]
+
+
 def rotate_controller_token() -> str:
     """Issue a new pairing code, invalidating every phone paired so far."""
     try:
         _controller_token_file().unlink()
     except OSError:
         pass
-    session.pop(CONTROLLER_SESSION_KEY, None)
     token = controller_token()
     log_event(log, logging.INFO, "web.controller_token_rotated")
     return token
@@ -223,7 +235,7 @@ def pair_controller(submitted: str) -> bool:
         return False
 
     pin_guard.clear(address)
-    session[CONTROLLER_SESSION_KEY] = True
+    session[CONTROLLER_SESSION_KEY] = controller_fingerprint()
     session.permanent = True
     csrf_token()
     log_event(log, logging.INFO, "web.controller_paired", address=address)
@@ -248,7 +260,10 @@ def is_controller() -> bool:
     config = current_app.config.get("ROOM_CONFIG")
     if config is not None and config.bool_("CONTROLLER_REQUIRE_PIN"):
         return False
-    return bool(session.get(CONTROLLER_SESSION_KEY))
+    paired = session.get(CONTROLLER_SESSION_KEY)
+    if not isinstance(paired, str) or not paired:
+        return False
+    return hmac.compare_digest(paired, controller_fingerprint())
 
 
 def admin_needed() -> bool:

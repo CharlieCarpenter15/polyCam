@@ -42,6 +42,7 @@ network. No keyboard, no YAML, no SSH.
 - [First-time account sign-in](#first-time-account-sign-in)
 - [Using the room](#using-the-room)
 - [The control panel](#the-control-panel)
+- [The room controller (scan the code)](#the-room-controller-scan-the-code)
 - [Background slideshow](#background-slideshow)
 - [Poly conference bar](#poly-conference-bar)
 - [Poly remote / controller](#poly-remote--controller)
@@ -292,6 +293,10 @@ TV returns to the dashboard by itself. There is also a hard limit — by default
 four hours — so the room can never be stuck on a stale meeting screen even if
 the calendar says something strange.
 
+**From a phone.** Scan the small code in the bottom-right corner of the TV and
+the room's buttons open on the phone — join, leave, mute, camera, volume. See
+[The room controller](#the-room-controller-scan-the-code).
+
 **Sharing a screen.** Mac or iPhone → Control Centre → Screen Mirroring →
 *Meeting Room*. The dashboard steps aside; when mirroring stops it comes back.
 
@@ -326,6 +331,71 @@ Settings page to the network without one.
 The dashboard also shows the control-panel address in its bottom corner. Turn
 that off once the room is set up: **Settings → System & access → Show the
 control-panel address on the TV**.
+
+---
+
+## The room controller (scan the code)
+
+The control panel above is for whoever looks after the room. The **controller**
+is for whoever is *in* it: a phone-sized page with the room's buttons on it,
+opened by pointing a camera at the small QR code in the bottom-right corner of
+the TV. No app, no PIN, nothing to remember.
+
+```
+                                            ┌──────────┐
+                                            │ ▙▚▘▟▘▚▙▘ │   Scan to control
+                                            │ ▘▙▚▟▚▘▙▚ │   this room
+                                            └──────────┘
+```
+
+**What it does**
+
+| | |
+| --- | --- |
+| Join / Leave | The one big button, which reads the room: join the meeting that is due, or leave the one that is running |
+| Microphone | Mute and unmute, showing which it currently is |
+| Camera | On and off in the meeting |
+| Volume | Up, down, and a slider |
+| Show dashboard | Put the room screen back on the TV |
+| Today's meetings | Tap any one of them to join that meeting instead |
+
+It shows what the room is doing in plain English — nothing scheduled, starting
+in four minutes, in a meeting, someone is sharing their screen, the room is
+offline — and it says what to do next in each case. Pressing a button on the
+physical Poly remote shows up on the phone too, and on the TV, so two people
+are never fighting a room that appears not to respond.
+
+**Turning it on**
+
+The QR code appears once phones on the room's network can actually reach the
+Pi. That is one switch:
+
+**Settings → Room controller → Let phones on the room network open the
+controller** — or from a terminal:
+
+```bash
+./scripts/roomctl set CONTROLLER_LAN_ACCESS true
+./scripts/roomctl restart backend
+./scripts/roomctl qr                  # the address behind the QR code
+```
+
+If **Allow settings from other computers on the network** is already on, the
+controller is reachable and the code appears without changing anything.
+
+**What a scanned phone can and cannot do**
+
+It gets the room buttons and nothing else — no Settings, no Diagnostics, no
+logs, no restarts. The design assumes the honest thing about a meeting room:
+someone who can see the code on the TV is standing in the room and could press
+the buttons on the TV anyway. Two settings tighten it where that is not true:
+
+| Setting | |
+| --- | --- |
+| **Ask for the admin PIN on the controller too** | For a room in a public space |
+| **New code** (control panel → Room controller) | Issues a fresh code and un-pairs every phone that has ever scanned the old one |
+
+Turn the whole thing off with **Settings → Room controller → Phone
+controller**, or hide just the code with **Show the QR code on the TV**.
 
 ---
 
@@ -1026,6 +1096,21 @@ The appliance sits on an office network in a shared room, so:
 - **The Pi itself is trusted; nothing else is.** Requests from `127.0.0.1` are
   the kiosk and local scripts. Everything else needs the PIN. `X-Forwarded-For`
   is deliberately ignored, so a remote client cannot claim to be local.
+- **The room controller is a second, weaker role, on purpose.** Scanning the
+  code on the TV pairs a phone for the room *buttons* — join, leave, mute,
+  camera, volume, show the dashboard — and nothing else. It cannot open
+  Settings, Diagnostics, the logs or a restart, and the API it uses accepts
+  that fixed list of actions and refuses everything else. The threat model is
+  the honest one for a meeting room: whoever can see the screen can already
+  walk over and press the buttons. `CONTROLLER_REQUIRE_PIN` withdraws even
+  that, for a room in a public space.
+- **The pairing code never leaves the Pi.** It lives in `var/controller-token`
+  (mode `0600`), and both the code and the QR image are served only to
+  `127.0.0.1` and to signed-in administrators — the dashboard is readable from
+  the LAN, so putting either in that payload would hand the room to anyone who
+  loaded the page without ever looking at it. Wrong codes are rate-limited on
+  the same counter as the PIN, and **New code** on the control panel invalidates
+  every phone paired so far.
 - **PIN attempts are rate-limited** (6 tries, then a two-minute pause) and
   compared in constant time.
 - **Every state-changing request needs a page token** (`X-Room-Token`), which
@@ -1061,6 +1146,7 @@ The appliance sits on an office network in a shared room, so:
 | `var/calendar-cache.json` | `0600` | Contains meeting URLs |
 | `var/flask-secret-key` | `0600` | Session signing key |
 | `var/internal-token` | `0600` | Shared secret for helper scripts |
+| `var/controller-token` | `0600` | Pairing code behind the QR on the TV |
 | `var/chromium-profile/` | `0700` | Room account sessions and cookies |
 | `var/backgrounds/` | `0755` | Images, served to the dashboard |
 
@@ -1193,6 +1279,11 @@ Localhost needs no authentication; anything else needs the PIN, and every
 | `POST /api/actions/reboot` · `/reset-safe` | |
 | `GET/POST /api/backgrounds` · `DELETE /api/backgrounds/<name>` | Slideshow images |
 | `GET /api/diagnostics` · `GET /api/logs` | |
+| `GET /api/controller/state` | What the phone controller renders |
+| `POST /api/controller/action` | `{"action": "join｜leave｜home｜mute｜camera｜volume_up｜volume_down｜volume_set"}` |
+| `POST /api/actions/controller-code` | Issue a new pairing code (admin) |
+| `GET /qr/controller.svg` | The pairing code as an image (the Pi and admins only) |
+| `GET /c/<code>` | Where the QR points: pairs the phone, opens the controller |
 
 ---
 
