@@ -129,6 +129,77 @@ class TestTheSwitch:
         assert payload == {"enabled": False, "recording": False, "notice": ""}
 
 
+class TestSwitchingItOnAndOffWhileRunning:
+    """What happens when somebody uses the switch on the Settings page.
+
+    The appliance does not restart when a setting changes, so turning this on
+    has to start the threads then and there, and turning it off has to stop
+    them. Getting this wrong is invisible: the switch moves, the page says it
+    is on, and nothing records anything.
+    """
+
+    def test_turning_it_on_starts_it(self, room_dirs, config):
+        config.update({"DEV_MODE": True, "CALENDAR_SOURCE": "mock"})
+        service = MinutesService(config, FakeCalendar(), FakeRoom(), None, FakeBrowser())
+        service.start()  # the appliance starting up, with the feature off
+        assert service._supervisor is None
+
+        config.update({"MINUTES_ENABLED": True})
+        try:
+            assert service._supervisor is not None, "the switch did not start it"
+            assert service._supervisor.is_alive()
+        finally:
+            service.stop()
+
+    def test_turning_it_off_stops_it(self, room_dirs, config):
+        config.update({"DEV_MODE": True, "CALENDAR_SOURCE": "mock", "MINUTES_ENABLED": True})
+        service = MinutesService(config, FakeCalendar(), FakeRoom(), None, FakeBrowser())
+        service.start()
+        assert service._supervisor is not None
+        try:
+            config.update({"MINUTES_ENABLED": False})
+            assert service._supervisor is None, "the switch did not stop it"
+        finally:
+            service.stop()
+
+    def test_it_can_be_switched_on_again_after_being_switched_off(self, room_dirs, config):
+        """The regression this guards: stopping used to mean "the appliance is
+        not running me", so a second switch-on did nothing at all."""
+        config.update({"DEV_MODE": True, "CALENDAR_SOURCE": "mock", "MINUTES_ENABLED": True})
+        service = MinutesService(config, FakeCalendar(), FakeRoom(), None, FakeBrowser())
+        service.start()
+        try:
+            config.update({"MINUTES_ENABLED": False})
+            config.update({"MINUTES_ENABLED": True})
+            assert service._supervisor is not None
+            assert service._supervisor.is_alive()
+        finally:
+            service.stop()
+
+    def test_a_meeting_being_recorded_is_finished_when_it_is_switched_off(
+        self, room_dirs, config
+    ):
+        config.update(
+            {
+                "DEV_MODE": True,
+                "CALENDAR_SOURCE": "mock",
+                "MINUTES_ENABLED": True,
+                "MINUTES_MIN_MEETING_SECONDS": 0,
+            }
+        )
+        service = MinutesService(config, FakeCalendar(), FakeRoom(), None, FakeBrowser())
+        service.start()
+        try:
+            service.room.active = FakeActive()
+            service.tick()
+            assert service.status()["recording"] is not None
+
+            config.update({"MINUTES_ENABLED": False})
+            assert service.list_sessions(), "the meeting in progress was thrown away"
+        finally:
+            service.stop()
+
+
 class TestTheRecordingLifecycle:
     def test_a_meeting_starts_and_stops_a_recording(self, service):
         service.room.active = FakeActive()
@@ -362,6 +433,88 @@ class TestCorrectingASpeaker:
         session_id = self._transcribed(service)
         ok, message = service.relabel(session_id, "Room speaker", "ffffffffffff")
         assert not ok and "No such person" in message
+
+
+class TestReadingTheMeetingWindow:
+    """The diagnostic for the failure nobody notices.
+
+    When a provider changes their page the appliance does not break and nothing
+    is logged as an error — remote speakers simply stop being named. This is how
+    somebody finds out which part of the page stopped answering.
+    """
+
+    def test_it_needs_a_meeting_on_screen(self, service):
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        result = service.probe_meeting_window()
+        assert result["ok"] is False
+        assert "no meeting on screen" in result["error"].lower()
+
+    def test_it_reports_what_it_read_and_where_from(self, service):
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        service.room.active = FakeActive()
+        service.browser.read_meeting_page = lambda script, **kw: {
+            "ok": True,
+            "participants": ["Priya Nair", "Sam Okafor"],
+            "speaking": ["Priya Nair"],
+            "source": 'tiles:[data-tid]',
+            "health": {"tiles": 2},
+        }
+        result = service.probe_meeting_window()
+        assert result["ok"] is True
+        assert result["participants"] == ["Priya Nair", "Sam Okafor"]
+        assert result["speaking"] == ["Priya Nair"]
+        assert result["source"] == "tiles:[data-tid]"
+
+    def test_a_page_it_cannot_read_says_what_that_means(self, service):
+        """The whole point: name the likely cause, not just the symptom."""
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        service.room.active = FakeActive()
+        service.browser.read_meeting_page = lambda script, **kw: {
+            "ok": False, "participants": [], "speaking": [], "reason": "no-surface",
+        }
+        result = service.probe_meeting_window()
+        assert result["ok"] is False
+        assert "changed their page" in result["error"]
+        assert "everything else still works" in result["error"]
+
+    def test_no_answer_at_all_is_explained(self, service):
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        service.room.active = FakeActive()
+        service.browser.read_meeting_page = lambda script, **kw: None
+        result = service.probe_meeting_window()
+        assert result["ok"] is False
+        assert "Chromium" in result["error"]
+
+    def test_a_browser_that_throws_is_survived(self, service):
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        service.room.active = FakeActive()
+
+        def explode(script, **kw):
+            raise RuntimeError("the websocket went away")
+
+        service.browser.read_meeting_page = explode
+        result = service.probe_meeting_window()
+        assert result["ok"] is False and result["error"]
+
+    def test_switched_off_says_so(self, service):
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": False})
+        result = service.probe_meeting_window()
+        assert result["ok"] is False
+        assert "switched off" in result["error"].lower()
+
+    def test_it_never_presses_anything(self, service):
+        """A diagnostic must not change the meeting it is diagnosing."""
+        service.config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": False})
+        service.room.active = FakeActive()
+        seen = {}
+
+        def record(script, **kw):
+            seen["gesture"] = kw.get("user_gesture", False)
+            return {"ok": True, "participants": ["Priya"], "speaking": []}
+
+        service.browser.read_meeting_page = record
+        service.probe_meeting_window()
+        assert seen["gesture"] is False
 
 
 class TestTheCameraStandsAside:

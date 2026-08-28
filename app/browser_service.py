@@ -74,6 +74,23 @@ MAX_ERROR_INTERVAL_SECONDS = 8.0
 LOBBY_WAIT_SECONDS = 300.0
 
 
+def _decoded(raw: Any) -> Any:
+    """What a meeting-page script handed back, as Python.
+
+    The injected scripts answer either with an object or with a string of JSON,
+    depending on which one wrote them, and a page that has been interrupted
+    mid-thought answers with neither. ``read_meeting_page`` does this inline
+    and is left exactly as it was; this is the same rule for the frame-walking
+    door beside it.
+    """
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return None
+    return raw
+
+
 @dataclass
 class JoinAttempt:
     """Record of the most recent auto-join, shown on the diagnostics page."""

@@ -49,9 +49,11 @@ page-resident script has no way to push.
 
 The script never clicks, never opens a panel and never types. The page is on a
 television in front of people; the appliance reads it, it does not operate it.
-The one exception is ``MINUTES_TURN_ON_CAPTIONS``, which is off by default
-precisely because switching captions on is a visible change to everybody's
-screen and ought to be somebody's decision.
+There are two exceptions, ``MINUTES_TURN_ON_CAPTIONS`` and
+``MINUTES_OPEN_ROSTER``, both off by default and for the same reason: switching
+captions on, or opening the participant list, is a visible change to
+everybody's screen and ought to be somebody's decision. Each is one attempt,
+once, at the start of a meeting.
 
 Names are never logged. This module handles the names of everyone in every
 meeting the room hosts and, through captions, what they said; only counts and
@@ -193,6 +195,78 @@ CAPTION_AVOID_TEXTS: tuple[str, ...] = (
     "language",
     "disable",
     "stop",
+)
+
+# ---------------------------------------------------------------------------
+# Opening the participant list, when an administrator has asked for that
+# ---------------------------------------------------------------------------
+#
+# Some tenants name almost nobody until the panel is open: the tiles carry a
+# stream id rather than a person, and the meeting is a wall of initials. This
+# is the cure, and it is off by default because the cure is visible — the panel
+# lands on the television and shrinks everybody's video.
+
+#: What "the panel is already open" looks like, per provider. These are the
+#: same subtrees the probes read names out of, minus anything that could match
+#: the button rather than the panel: mistaking the control for the panel would
+#: mean deciding it is open and never pressing it.
+ROSTER_PANEL_SELECTORS: dict[str, tuple[str, ...]] = {
+    "teams": (
+        '[data-tid="roster"]',
+        '[data-tid="people-pane"]',
+        '[data-tid="roster-section"]',
+        '[data-tid*="participant-list"]',
+        "#roster-container",
+        ".ts-calling-roster",
+        '[role="tree"][aria-label*="articipant"]',
+    ),
+    "meet": (
+        'div[aria-label="Participants"][role="list"]',
+        '[aria-label*="articipant"][role="list"]',
+        '[aria-label*="veryone"][role="list"]',
+    ),
+    "zoom": (
+        "#participants-ul",
+        ".participants-section-container",
+        '[class*="participants-item__display-name"]',
+        '[class*="participants-li"]',
+    ),
+}
+
+#: Matched by visible text, the same way everything else here is matched —
+#: class names rot, the words on a button do not. Most specific first, because
+#: an exact match beats a "contains" one.
+ROSTER_BUTTON_TEXTS: dict[str, tuple[str, ...]] = {
+    "teams": ("Show participants", "Show people", "People", "Participants"),
+    "meet": ("Show everyone", "People", "Participants"),
+    "zoom": ("Open the participants list pane", "Manage participants", "Participants"),
+}
+
+#: ...and what must never be pressed while looking for one. Two kinds of entry
+#: are here: the ones that would close a panel somebody already opened, and the
+#: ones that would do something to the meeting nobody asked for. A control that
+#: mentions leaving the call is the reason this list is not optional.
+ROSTER_AVOID_TEXTS: tuple[str, ...] = (
+    "hide",
+    "close",
+    "collapse",
+    "leave",
+    "end call",
+    "end meeting",
+    "hang up",
+    "invite",
+    "add people",
+    "add someone",
+    "remove",
+    "mute all",
+    "unmute",
+    "chat",
+    "settings",
+    "search",
+    "copy",
+    "report",
+    "record",
+    "share",
 )
 
 #: Strings a probe can legitimately produce that are diagnostics, not people.
@@ -1105,6 +1179,122 @@ _DRAIN_JS = r"""
 })()
 """
 
+# The one pass that opens the participant list. It looks before it presses, in
+# the same turn: a room that pressed a control somebody had already used would
+# close the panel on them, which is worse than never having opened it.
+_PANEL_JS = r"""
+  var PANEL_SELECTORS = __PANEL__;
+  var PANEL_WANTED = __WANTED__;
+  var PANEL_AVOID = __AVOID__;
+
+  function panelNorm(s) { return norm(s).toLowerCase(); }
+
+  function panelVisible(el) {
+    if (!el || el.disabled) return false;
+    if (panelNorm(attr(el, "aria-disabled")) === "true") return false;
+    var rect;
+    try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
+    if (!rect || rect.width < 8 || rect.height < 8) return false;
+    var style;
+    try { style = window.getComputedStyle(el); } catch (e) { return false; }
+    if (!style) return false;
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (parseFloat(style.opacity || "1") < 0.15) return false;
+    return true;
+  }
+
+  function panelLabel(el) {
+    var text = panelNorm(textOf(el));
+    if (!text) text = panelNorm(attr(el, "aria-label") || attr(el, "title"));
+    return text;
+  }
+
+  function panelAvoided(text) {
+    for (var i = 0; i < PANEL_AVOID.length; i++) {
+      var term = panelNorm(PANEL_AVOID[i]);
+      if (term && text.indexOf(term) !== -1) return true;
+    }
+    return false;
+  }
+
+  function panelWants(text) {
+    for (var i = 0; i < PANEL_WANTED.length; i++) {
+      var want = panelNorm(PANEL_WANTED[i]);
+      if (want && text.indexOf(want) !== -1) return true;
+    }
+    return false;
+  }
+
+  // Two ways to know the panel is already up. The subtree is the reliable one;
+  // a control marked expanded is the only one available while the panel is
+  // still animating in, and it is what the apps use to say so out loud.
+  function panelOpen() {
+    var found = firstMatch(PANEL_SELECTORS, 2);
+    if (found.nodes.length) return found.selector;
+    var toggles = deepQuery('[aria-expanded="true"]', 40);
+    for (var i = 0; i < toggles.length; i++) {
+      var text = panelLabel(toggles[i]);
+      if (text && !panelAvoided(text) && panelWants(text)) return "aria-expanded";
+    }
+    return "";
+  }
+
+  function panelControl() {
+    var nodes = deepQuery(
+      'button, [role="button"], [role="menuitem"], [role="menuitemcheckbox"], [role="tab"]',
+      600
+    );
+    var best = null, bestRank = 1e9, bestText = "";
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (!panelVisible(el)) continue;
+      var text = panelLabel(el);
+      if (!text || text.length > 80) continue;
+      if (panelAvoided(text)) continue;
+      for (var w = 0; w < PANEL_WANTED.length; w++) {
+        var want = panelNorm(PANEL_WANTED[w]);
+        if (!want) continue;
+        // An exact match beats a "contains" one, and an earlier entry in the
+        // provider's list beats a later one.
+        var rank = text === want ? w : (text.indexOf(want) !== -1 ? 1000 + w : -1);
+        if (rank >= 0 && rank < bestRank) {
+          best = el; bestRank = rank; bestText = text;
+        }
+      }
+    }
+    return { el: best, text: bestText, seen: nodes.length };
+  }
+
+  function openRoster() {
+    var open;
+    try {
+      open = panelOpen();
+    } catch (e) {
+      return { open: false, clicked: null, source: "",
+               error: "exception:" + (e && e.name ? e.name : "unknown") };
+    }
+    if (open) return { open: true, clicked: null, source: open, candidates: 0 };
+    var found;
+    try {
+      found = panelControl();
+    } catch (e) {
+      return { open: false, clicked: null, source: "",
+               error: "exception:" + (e && e.name ? e.name : "unknown") };
+    }
+    if (!found.el) {
+      return { open: false, clicked: null, source: "", candidates: found.seen };
+    }
+    try { found.el.scrollIntoView({ block: "center" }); } catch (e) { /* ignore */ }
+    try {
+      found.el.click();
+    } catch (e) {
+      return { open: false, clicked: null, source: "", candidates: found.seen,
+               error: "exception:" + (e && e.name ? e.name : "unknown") };
+    }
+    return { open: false, clicked: found.text, source: "", candidates: found.seen };
+  }
+"""
+
 _PROVIDER_BLOCKS: dict[str, str] = {
     "teams": _TEAMS_JS,
     "meet": _MEET_JS,
@@ -1165,6 +1355,44 @@ def build_captions_script() -> str:
     return build_click_script(
         list(CAPTION_BUTTON_TEXTS), avoid_texts=CAPTION_AVOID_TEXTS
     )
+
+
+def _panel_families(provider_id: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The panel selectors and button words for one provider.
+
+    An unrecognised provider gets all three families in turn, exactly as
+    ``_probe_body`` does with the probes: a Webex meeting is more likely to
+    answer to somebody else's selectors than to none at all.
+    """
+    provider = (provider_id or "").strip().lower()
+    if provider in ROSTER_PANEL_SELECTORS:
+        return ROSTER_PANEL_SELECTORS[provider], ROSTER_BUTTON_TEXTS[provider]
+
+    selectors: list[str] = []
+    words: list[str] = []
+    for known in ("teams", "meet", "zoom"):
+        selectors.extend(ROSTER_PANEL_SELECTORS[known])
+        for word in ROSTER_BUTTON_TEXTS[known]:
+            if word.lower() not in {w.lower() for w in words}:
+                words.append(word)
+    return tuple(selectors), tuple(words)
+
+
+def build_roster_panel_script(provider_id: str) -> str:
+    """One pass that opens the participant list, and can only ever open it.
+
+    The reply says which of the two things happened — ``open`` for a panel
+    somebody already had up and ``clicked`` for one this pass opened — because
+    "nothing was pressed" means two very different things and the log should
+    not have to guess which.
+    """
+    selectors, words = _panel_families(provider_id)
+    body = (
+        _PANEL_JS.replace("__PANEL__", json.dumps(list(selectors)))
+        .replace("__WANTED__", json.dumps(list(words)))
+        .replace("__AVOID__", json.dumps(list(ROSTER_AVOID_TEXTS)))
+    )
+    return "(function () {\n" + _PRELUDE_JS + body + "\n  return openRoster();\n})()"
 
 
 # ---------------------------------------------------------------------------
@@ -1426,6 +1654,8 @@ class RosterSampler:
         try:
             if self.config.bool_("MINUTES_TURN_ON_CAPTIONS"):
                 self._press_captions()
+            if self.config.bool_("MINUTES_OPEN_ROSTER"):
+                self._open_participants()
 
             while not self._stop.is_set():
                 status = self._pass()
@@ -1658,6 +1888,33 @@ class RosterSampler:
         pressed = bool(isinstance(payload, dict) and payload.get("clicked"))
         log_event(
             log, logging.INFO, "minutes.roster_captions_requested", pressed=pressed
+        )
+
+    # -- opening the participant list -------------------------------------
+    def _open_participants(self) -> None:
+        """One attempt at the meeting's own participant panel, and no more.
+
+        The same discipline as the captions press, for the same reason: the
+        panel appears on the television and shrinks everybody's video, so it
+        happens only when an administrator has asked for it, only once, and
+        only if the panel is not up already. A room that toggled a panel
+        somebody else had opened would be taking it away from them.
+        """
+        with self._lock:
+            provider = self._provider
+        payload = self._read(
+            build_roster_panel_script(provider), user_gesture=True
+        )
+        reply = payload if isinstance(payload, dict) else {}
+        already = bool(reply.get("open"))
+        pressed = bool(reply.get("clicked"))
+        log_event(
+            log,
+            logging.INFO,
+            "minutes.roster_panel_requested",
+            pressed=pressed,
+            already_open=already,
+            provider=provider or "unknown",
         )
 
 

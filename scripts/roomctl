@@ -25,6 +25,13 @@
 #   roomctl panel                      print the control panel address
 #   roomctl qr                         the phone controller address + code
 #   roomctl qr new                     issue a new pairing code
+#   roomctl minutes [status]           meeting minutes: what the feature is doing
+#   roomctl minutes list [n]           the last n meetings recorded
+#   roomctl minutes show [id]          one meeting; --transcript / --summary alone
+#   roomctl minutes process <id>       write that meeting up again
+#   roomctl minutes delete <id>        remove a meeting for good
+#   roomctl minutes sweep              apply the retention policy now
+#   roomctl minutes people             who the room has been taught to recognise
 #   roomctl update                     pull the latest room software now
 #   roomctl reset                      settings back to defaults (keeps calendar)
 #   roomctl reboot
@@ -780,6 +787,937 @@ cmd_appliance() {
   fi
 }
 
+# ------------------------------------------------------------------ minutes
+#
+# app/minutes records a meeting, transcribes it, works out who spoke, asks
+# Claude for a summary and emails it out. Everything below drives the *running*
+# appliance over its own HTTP API rather than reading var/minutes, because the
+# appliance owns those files and may be half-way through writing one.
+#
+# A request from 127.0.0.1 is already an administrator (is_local_request, in
+# app/web_security.py), so reading needs no secret at all. Anything that
+# changes something must carry the page token as well, exactly as the browser
+# does — minutes_sign_in collects one. room_post_internal is not used here
+# because this feature has no /api/internal/ routes to post to; if you add
+# some, move these calls onto them and delete minutes_sign_in.
+#
+# With nothing answering on the port, every read falls back to the files and
+# says so. Somebody who has just SSHed into a Pi whose dashboard will not start
+# is exactly the person these commands are for.
+
+# Resolved once, by cmd_minutes.
+MINUTES_PORT=8080
+MINUTES_VAR=""
+MINUTES_ON=""
+MINUTES_UP=""
+MINUTES_COOKIE=""
+MINUTES_TOKEN=""
+# Set while printing something meant to be piped, so notes go to stderr and
+# what lands on stdout is exactly the transcript (or exactly the summary).
+MINUTES_BARE=""
+
+minutes_note() {
+  if [ -n "$MINUTES_BARE" ]; then dim "  $*" >&2; else dim "  $*"; fi
+}
+
+minutes_problem() {
+  if [ -n "$MINUTES_BARE" ]; then red "  $*" >&2; else red "  $*"; fi
+}
+
+# A blank line that follows its notes, so that --transcript stays pipeable.
+minutes_gap() {
+  if [ -n "$MINUTES_BARE" ]; then printf '\n' >&2; else printf '\n'; fi
+}
+
+# minutes_appliance — 0 when the room software is up and the feature is on.
+minutes_appliance() {
+  case "$MINUTES_UP" in
+    yes) return 0 ;;
+    no) return 1 ;;
+  esac
+  MINUTES_UP=no
+  [ -n "$MINUTES_ON" ] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  curl --silent --fail --max-time 5 --output /dev/null \
+    "http://127.0.0.1:${MINUTES_PORT}/api/health" || return 1
+  MINUTES_UP=yes
+  return 0
+}
+
+# minutes_get PATH — the appliance's JSON answer on stdout.
+minutes_get() {
+  curl --silent --max-time 20 "http://127.0.0.1:${MINUTES_PORT}$1" 2>/dev/null
+}
+
+# minutes_sign_in — collect the token every state-changing request must carry.
+#
+# The appliance puts one in `<body data-csrf>` on every page it serves and
+# checks it against the session cookie set alongside it, so that a form on
+# somebody else's website cannot press this room's buttons. A script has to ask
+# for the pair the same way a browser does; two extra requests is a far better
+# trade than a second way into app/web_security.py.
+minutes_sign_in() {
+  [ -z "$MINUTES_TOKEN" ] || return 0
+  local reply
+  reply="$(curl --silent --max-time 10 --dump-header - \
+             "http://127.0.0.1:${MINUTES_PORT}/" 2>/dev/null | tr -d '\r')" || return 1
+  MINUTES_COOKIE="$(printf '%s\n' "$reply" |
+    sed -n 's/^[Ss]et-[Cc]ookie: *\(session=[^;]*\).*/\1/p' | head -1)"
+  MINUTES_TOKEN="$(printf '%s\n' "$reply" |
+    sed -n 's/.*data-csrf="\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$MINUTES_COOKIE" ] && [ -n "$MINUTES_TOKEN" ]
+}
+
+# minutes_send METHOD PATH — a call that changes something. JSON on stdout.
+minutes_send() {
+  local method="$1" path="$2"
+  if ! minutes_sign_in; then
+    printf '%s\n' '{"ok": false, "error": "The room software would not issue a page token. Restart it: roomctl restart backend"}'
+    return 0
+  fi
+  curl --silent --max-time 120 --request "$method" \
+    --header "Cookie: $MINUTES_COOKIE" \
+    --header "X-Room-Token: $MINUTES_TOKEN" \
+    --header 'Content-Type: application/json' \
+    "http://127.0.0.1:${MINUTES_PORT}$path" 2>/dev/null
+}
+
+# minutes_preamble — the state of play, said once, before anything is printed.
+# Returns 0 when the appliance can be asked, 1 when the answer has to come off
+# the disk instead.
+minutes_preamble() {
+  if [ -z "$MINUTES_ON" ]; then
+    minutes_note "Meeting minutes is switched off, so nothing is being recorded now."
+    minutes_note "Turn it on with:  roomctl set MINUTES_ENABLED true"
+    minutes_note "                  roomctl restart backend"
+    minutes_note "Anything recorded before it was switched off is still on the disk:"
+    minutes_gap
+    return 1
+  fi
+  minutes_appliance && return 0
+  minutes_note "The room software is not answering on port ${MINUTES_PORT}, so what follows"
+  minutes_note "is read off the disk instead. What is being recorded right now, and what"
+  minutes_note "the worker is doing, cannot be known from here."
+  minutes_note "  reading  ${MINUTES_VAR}"
+  minutes_note "  roomctl start backend   then   roomctl logs backend"
+  minutes_gap
+  return 1
+}
+
+# minutes_needs_appliance WHY — refuse a job only the running appliance can do,
+# and say which of the two reasons it is.
+minutes_needs_appliance() {
+  minutes_appliance && return 0
+  local line
+  for line in "$@"; do red "  $line"; done
+  if [ -z "$MINUTES_ON" ]; then
+    dim "  Meeting minutes is switched off. Turn it on with:"
+    dim "    roomctl set MINUTES_ENABLED true   then   roomctl restart backend"
+  else
+    dim "  Nothing is answering on port ${MINUTES_PORT}. Start it and try again:"
+    dim "    roomctl start backend   then   roomctl logs backend"
+  fi
+  return 1
+}
+
+# minutes_python — the reader and the formatter, as a program on stdout.
+#
+# python3 rather than jq: no other script here needs jq, and this is a Python
+# appliance, so python3 is certainly present and jq may not be. It is handed to
+# python3 as an argument precisely so the records can arrive on stdin — a
+# transcript is what people said in a private meeting, and it is never written
+# to a file, not even a temporary one, and never logged.
+minutes_python() {
+  cat << 'PYEOF'
+"""Format the meeting-minutes records for a terminal.
+
+Called two ways. With "-" as the source the appliance's own JSON arrives on
+stdin, which is the path to prefer: it owns var/minutes and may be writing to
+it. With a directory the files are read here instead, which is all that is left
+when the room software is not running.
+"""
+
+import json
+import os
+import re
+import sys
+import textwrap
+from datetime import datetime
+
+BOLD, DIM, RED, GREEN, YELLOW, OFF = (
+    "\033[1m", "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[0m"
+)
+TICK = f"{GREEN}✓{OFF}"
+CROSS = f"{RED}✗{OFF}"
+SESSION_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$")
+
+#: The order the capabilities are explained in: what has to work first, first.
+CAPABILITIES = ("audio", "transcribe", "roster", "faces", "voices", "summary", "email")
+
+
+def stop(message):
+    sys.stderr.write(f"  {RED}{message}{OFF}\n")
+    raise SystemExit(1)
+
+
+def load(*parts):
+    try:
+        with open(os.path.join(*parts), encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return None
+
+
+def wrapped(text, indent="      "):
+    for line in textwrap.wrap(str(text or "").strip(), width=78 - len(indent)):
+        print(f"{DIM}{indent}{line}{OFF}")
+
+
+def clock(seconds):
+    """Seconds into a meeting as mm:ss, or h:mm:ss once it runs past the hour."""
+    try:
+        total = max(0, int(float(seconds or 0)))
+    except (TypeError, ValueError):
+        total = 0
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def moment(stamp):
+    """An ISO timestamp on the room's own clock, or None."""
+    try:
+        at = datetime.fromisoformat(str(stamp))
+    except (TypeError, ValueError):
+        return None
+    if at.tzinfo is not None:
+        try:
+            at = at.astimezone()
+        except (OSError, ValueError, OverflowError):
+            pass
+    return at
+
+
+def when_short(stamp):
+    at = moment(stamp)
+    if at is None:
+        return str(stamp or "")[:12]
+    return f"{at.day} {at:%b} {at:%H:%M}"
+
+
+def when_long(started, ended):
+    """"28 August 2026, 09:00 – 09:32 (32 min)", as much of it as is known."""
+    at = moment(started)
+    if at is None:
+        return str(started or "unknown")
+    text = f"{at.day} {at:%B %Y}, {at:%H:%M}"
+    done = moment(ended)
+    if done is None:
+        return f"{text} (no end recorded — it may have been interrupted)"
+    minutes = int((done - at).total_seconds() // 60)
+    return f"{text} – {done:%H:%M}  ({minutes} min)"
+
+
+def fit(text, width):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def field(name, value):
+    print(f"  {name:<12}{value}")
+
+
+# ---------------------------------------------------------------------------
+# Reading the files, when there is no appliance to ask
+# ---------------------------------------------------------------------------
+
+
+def session_ids(root):
+    """Every recorded meeting on the disk, newest first (the id sorts by time)."""
+    where = os.path.join(root, "sessions")
+    try:
+        names = os.listdir(where)
+    except OSError:
+        return []
+    found = [
+        name
+        for name in names
+        if SESSION_ID.match(name) and os.path.isdir(os.path.join(where, name))
+    ]
+    return sorted(found, reverse=True)
+
+
+def read_row(root, session_id):
+    """One list row, built to the same shape MinutesService.list_sessions gives."""
+    where = os.path.join(root, "sessions", session_id)
+    meta = load(where, "meta.json")
+    if not isinstance(meta, dict):
+        return None
+    summary = load(where, "summary.json") or {}
+    delivery = load(where, "delivery.json") or {}
+    try:
+        names = os.listdir(where)
+    except OSError:
+        names = []
+    return {
+        "session_id": session_id,
+        "title": meta.get("title") or "",
+        "started_at": meta.get("started_at") or "",
+        "ended_at": meta.get("ended_at") or "",
+        "provider": meta.get("provider") or "",
+        "stage": meta.get("stage") or "",
+        "error": meta.get("error") or "",
+        "has_summary": bool(summary.get("ok")),
+        "has_audio": any(name.endswith(".wav") for name in names),
+        "sent_to": len(delivery.get("sent_to") or []),
+    }
+
+
+def read_session(root, session_id):
+    """One meeting, to the same shape MinutesService.get_session gives."""
+    where = os.path.join(root, "sessions", session_id)
+    meta = load(where, "meta.json")
+    if not isinstance(meta, dict):
+        return None
+    written = load(where, "transcript.json")
+    if not isinstance(written, dict):
+        written = None
+    return {
+        "session_id": session_id,
+        "meta": meta,
+        "transcript": written,
+        "text": render_text(written),
+        "speakers": speakers(written),
+        "summary": load(where, "summary.json"),
+        "delivery": load(where, "delivery.json"),
+        "recipients": recipients(written, meta),
+    }
+
+
+def read_people(root):
+    """The roster, counted rather than copied.
+
+    A face or a voice is stored as an embedding, which is biometric data. It is
+    counted here and never printed — the same rule Person.to_public_dict keeps
+    for the browser.
+    """
+    payload = load(root, "people", "people.json")
+    rows = payload.get("people") if isinstance(payload, dict) else None
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        face = row.get("face")
+        voice = row.get("voice")
+        out.append(
+            {
+                "name": str(row.get("name") or ""),
+                "email": str(row.get("email") or ""),
+                "faces": len(face) if isinstance(face, list) else 0,
+                "voices": len(voice) if isinstance(voice, list) else 0,
+            }
+        )
+    out.sort(key=lambda person: person["name"].lower())
+    return out
+
+
+def segments(written):
+    rows = (written or {}).get("segments")
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    return sorted(rows, key=lambda row: float(row.get("start") or 0))
+
+
+def label(row):
+    """What goes in front of the line — Transcript.label(), kept in step."""
+    speaker = str(row.get("speaker") or "").strip()
+    if speaker:
+        return speaker
+    return "Remote speaker" if row.get("track") == "far-end" else "Room speaker"
+
+
+def render_text(written):
+    return "\n".join(
+        f"[{clock(row.get('start'))}] {label(row)}: {' '.join(str(row.get('text') or '').split())}"
+        for row in segments(written)
+    )
+
+
+def speakers(written):
+    seen = []
+    for row in segments(written):
+        name = label(row)
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def recipients(written, meta):
+    out, seen = [], set()
+    people = (written or {}).get("participants")
+    addresses = [
+        person.get("email") for person in people if isinstance(person, dict)
+    ] if isinstance(people, list) else []
+    invited = (meta or {}).get("invited")
+    if isinstance(invited, list):
+        addresses += invited
+    for address in addresses:
+        clean = str(address or "").strip()
+        if "@" not in clean or clean.lower() in seen:
+            continue
+        seen.add(clean.lower())
+        out.append(clean)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Where a payload comes from
+# ---------------------------------------------------------------------------
+
+
+def from_stdin():
+    """The appliance's answer, or its complaint, said plainly and then stop."""
+    try:
+        payload = json.load(sys.stdin)
+    except ValueError:
+        stop("The room software sent an answer this script could not read. "
+             "Try: roomctl logs backend")
+    if not isinstance(payload, dict):
+        stop("The room software sent an answer this script could not read.")
+    if not payload.get("ok"):
+        stop(str(payload.get("error") or "The room software refused that."))
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Printing
+# ---------------------------------------------------------------------------
+
+
+def print_status(data, live):
+    stats = data.get("people") or {}
+    field("meetings", f"{data.get('sessions', 0)} on this appliance")
+    field(
+        "people",
+        f"{stats.get('people', 0)} enrolled — "
+        f"{stats.get('with_face', 0)} with a face, {stats.get('with_voice', 0)} with a voice",
+    )
+    if not live:
+        return
+    recording = data.get("recording")
+    if recording:
+        print(
+            f"  {GREEN}●{OFF} {'recording':<9} “{recording.get('title') or 'Untitled'}”"
+            f"  {clock(recording.get('seconds'))} elapsed"
+        )
+        field("", recording.get("session_id") or "")
+    else:
+        field("recording", "nothing right now")
+    queued = int(data.get("queued") or 0)
+    working = str(data.get("working_on") or "").strip()
+    if working:
+        field("worker", f"{working}" + (f"   ({queued} more queued)" if queued else ""))
+    elif queued:
+        field("worker", f"idle — {queued} waiting to be written up")
+    else:
+        field("worker", "idle")
+    if data.get("last_error"):
+        print(f"  {YELLOW}last error{OFF}  {data['last_error']}")
+
+    print()
+    print(f"{BOLD}What it can do{OFF}")
+    caps = data.get("capabilities") or {}
+    for name in CAPABILITIES:
+        cap = caps.get(name) or {}
+        if not isinstance(cap, dict):
+            continue
+        mark = TICK if cap.get("ok") else CROSS
+        print(f"  {mark} {name}")
+        if not cap.get("ok"):
+            # These reasons are written to be acted on — "…is not installed.
+            # Install it with: pip install…" — so they are printed as they are.
+            wrapped(cap.get("detail"))
+
+
+def print_list(rows, limit):
+    rows = [row for row in rows if isinstance(row, dict)][: max(1, limit)]
+    if not rows:
+        print(f"{DIM}  No meetings have been recorded on this appliance.{OFF}")
+        return
+    header = "  {:<24}  {:<12}  {:<20}  {:<8}  {:<11}  {:<7}  {}".format(
+        "id", "when", "title", "provider", "stage", "summary", "emailed"
+    )
+    print(f"{DIM}{header}{OFF}")
+    failed = False
+    for row in rows:
+        failed = failed or row.get("stage") == "failed"
+        print(
+            "  {:<24}  {:<12}  {:<20}  {:<8}  {:<11}  {:<7}  {}".format(
+                row.get("session_id") or "",
+                when_short(row.get("started_at")),
+                fit(row.get("title") or "Untitled", 20),
+                fit(row.get("provider") or "—", 8),
+                fit(row.get("stage") or "—", 11),
+                "yes" if row.get("has_summary") else "no",
+                row.get("sent_to") or "no",
+            )
+        )
+    if failed:
+        print()
+        print(f"{DIM}  A meeting at “failed” says why in:  roomctl minutes show <id>{OFF}")
+
+
+def print_facts(session):
+    meta = session.get("meta") or {}
+    delivery = session.get("delivery") or {}
+    print(f"{BOLD}Meeting{OFF}")
+    field("id", session.get("session_id") or "")
+    field("title", meta.get("title") or "Untitled")
+    field("when", when_long(meta.get("started_at"), meta.get("ended_at")))
+    field("provider", meta.get("provider") or "—")
+    if meta.get("room"):
+        field("room", meta["room"])
+    if meta.get("organizer"):
+        field("organiser", meta["organizer"])
+    field("stage", meta.get("stage") or "—")
+    if delivery.get("sent_to"):
+        field("emailed", f"{len(delivery['sent_to'])} recipient(s)")
+    elif delivery.get("error"):
+        field("emailed", f"{RED}no{OFF} — {delivery['error']}")
+    else:
+        field("emailed", "not sent")
+    if meta.get("error"):
+        print(f"  {RED}{'error':<12}{OFF}{meta['error']}")
+
+
+def print_people_in(session):
+    written = session.get("transcript") or {}
+    people = [p for p in (written.get("participants") or []) if isinstance(p, dict)]
+    in_room = [p.get("name") for p in people if p.get("where") == "room"]
+    remote = [p.get("name") for p in people if p.get("where") == "remote"]
+    speaking = session.get("speakers") or []
+    if not (in_room or remote or speaking):
+        return
+    print()
+    print(f"{BOLD}Who was there{OFF}")
+    if in_room:
+        field("in the room", ", ".join(str(n) for n in in_room if n))
+    if remote:
+        field("dialled in", ", ".join(str(n) for n in remote if n))
+    if speaking:
+        field("spoke", ", ".join(str(n) for n in speaking if n))
+    if session.get("recipients"):
+        field("recipients", ", ".join(session["recipients"]))
+    unknown = [n for n in speaking if n in ("Room speaker", "Remote speaker")]
+    if unknown:
+        wrapped(
+            "Somebody in this transcript is unnamed. Putting a name to them on "
+            "the /minutes page corrects the transcript and teaches the room "
+            "that voice at the same time.",
+            indent="  ",
+        )
+
+
+def summary_text(session):
+    summary = session.get("summary")
+    if not isinstance(summary, dict):
+        return "", ""
+    if summary.get("ok") and str(summary.get("text") or "").strip():
+        return str(summary["text"]).strip(), ""
+    return "", str(summary.get("error") or "").strip()
+
+
+def print_session(session, view):
+    if view == "transcript":
+        text = str(session.get("text") or "")
+        if not text.strip():
+            stop("That meeting has no transcript yet. Its stage says how far it got: "
+                 "roomctl minutes show " + str(session.get("session_id") or ""))
+        print(text)
+        return
+    if view == "summary":
+        text, why = summary_text(session)
+        if not text:
+            stop(why or "That meeting has no summary. Ask for one again with: "
+                        "roomctl minutes process " + str(session.get("session_id") or ""))
+        print(text)
+        return
+
+    print_facts(session)
+    if view == "facts":
+        return
+    print_people_in(session)
+
+    text, why = summary_text(session)
+    print()
+    print(f"{BOLD}Summary{OFF}")
+    if text:
+        for line in text.splitlines():
+            print(f"  {line}")
+    elif why:
+        wrapped(why, indent="  ")
+    else:
+        session_id = str(session.get("session_id") or "")
+        print(f"{DIM}  None yet. Ask for one with:  "
+              f"roomctl minutes process {session_id}{OFF}")
+
+    print()
+    print(f"{BOLD}Transcript{OFF}")
+    body = str(session.get("text") or "")
+    if not body.strip():
+        wrapped("Nothing was transcribed for this meeting.", indent="  ")
+        return
+    for line in body.splitlines():
+        print(f"  {line}")
+    for notice in (session.get("transcript") or {}).get("notices") or []:
+        wrapped(notice, indent="  ")
+
+
+def print_people(rows, stats):
+    rows = [row for row in rows if isinstance(row, dict)]
+    if not rows:
+        print(f"{DIM}  Nobody is enrolled, so every speaker will be “Room speaker”.{OFF}")
+        print(f"{DIM}  Add people, photos and voice samples on the /minutes page — a{OFF}")
+        print(f"{DIM}  photo has to be uploaded and a voice has to be recorded in the{OFF}")
+        print(f"{DIM}  room, and neither fits down a terminal.{OFF}")
+        return
+    header = "  {:<24}  {:<30}  {:<6}  {}".format("name", "email", "faces", "voices")
+    print(f"{DIM}{header}{OFF}")
+    for row in rows:
+        print(
+            "  {:<24}  {:<30}  {:<6}  {}".format(
+                fit(row.get("name"), 24),
+                fit(row.get("email") or "—", 30),
+                row.get("faces") or 0,
+                row.get("voices") or 0,
+            )
+        )
+    if stats:
+        print()
+        print(
+            f"{DIM}  {stats.get('with_face', 0)} of {stats.get('people', 0)} can be "
+            f"recognised by face, {stats.get('with_voice', 0)} by voice.{OFF}"
+        )
+
+
+def print_detail(payload):
+    detail = str(payload.get("detail") or "").strip()
+    print(f"  {TICK} {detail or 'Done.'}")
+
+
+# ---------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------
+
+
+def main(argv):
+    what = argv[1] if len(argv) > 1 else ""
+    source = argv[2] if len(argv) > 2 else "-"
+    args = argv[3:]
+    live = source == "-"
+
+    if what == "status":
+        if live:
+            data = from_stdin()
+        else:
+            roster = read_people(source)
+            data = {
+                "sessions": len(session_ids(source)),
+                "people": {
+                    "people": len(roster),
+                    "with_face": sum(1 for person in roster if person["faces"]),
+                    "with_voice": sum(1 for person in roster if person["voices"]),
+                },
+            }
+        print_status(data, live)
+        return
+
+    if what == "list":
+        limit = int(args[0]) if args and args[0].isdigit() else 20
+        if live:
+            rows = from_stdin().get("sessions") or []
+        else:
+            rows = [read_row(source, i) for i in session_ids(source)[:limit]]
+            rows = [row for row in rows if row]
+        print_list(rows, limit)
+        return
+
+    if what == "show":
+        session_id = args[0] if args else ""
+        view = args[1] if len(args) > 1 else "full"
+        session = from_stdin().get("session") if live else read_session(source, session_id)
+        if not isinstance(session, dict):
+            stop(f"Nothing on this appliance is recorded under {session_id}.")
+        print_session(session, view)
+        return
+
+    if what == "people":
+        if live:
+            payload = from_stdin()
+            print_people(payload.get("people") or [], payload.get("stats") or {})
+        else:
+            print_people(read_people(source), {})
+        return
+
+    if what == "resolve":
+        prefix = args[0] if args else ""
+        if live:
+            ids = [
+                str(row.get("session_id") or "")
+                for row in from_stdin().get("sessions") or []
+                if isinstance(row, dict)
+            ]
+        else:
+            ids = session_ids(source)
+        if not ids:
+            print("NONE")
+        elif not prefix:
+            print("OK " + ids[0])       # the newest; the ids sort by time
+        elif prefix in ids:
+            print("OK " + prefix)
+        else:
+            hits = [i for i in ids if i.startswith(prefix)]
+            if len(hits) == 1:
+                print("OK " + hits[0])
+            elif not hits:
+                print("NONE")
+            else:
+                print("\n".join(["MANY"] + hits))
+        return
+
+    if what == "remove":
+        where = os.path.join(source, "sessions", args[0] if args else "")
+        if not SESSION_ID.match(args[0] if args else "") or not os.path.isdir(where):
+            stop("Nothing on this appliance is recorded under that id.")
+        import shutil
+
+        try:
+            shutil.rmtree(where)
+        except OSError as exc:
+            stop(f"That meeting could not be deleted: {exc}")
+        print(f"  {TICK} That meeting — audio, transcript and summary — has been deleted.")
+        return
+
+    if what == "detail":
+        print_detail(from_stdin())
+        return
+
+    stop(f"minutes: nothing renders “{what}”.")
+
+
+main(sys.argv)
+PYEOF
+}
+
+# minutes_render WHAT SOURCE [ARG…] — the records as text on stdout. SOURCE is
+# "-" to read the appliance's JSON from stdin, or the directory to read instead.
+minutes_render() {
+  py -c "$(minutes_python)" "$@"
+}
+
+# minutes_resolve PREFIX — a full session id on stdout, git-style.
+#
+# Session ids are long and nobody retypes one correctly. An unambiguous leading
+# part is enough, an empty one means the most recent meeting, and an ambiguous
+# one is refused with the candidates rather than guessed at. Everything except
+# the id itself goes to stderr, so the caller can capture the answer.
+minutes_resolve() {
+  local prefix="${1:-}" answer
+  if minutes_appliance; then
+    answer="$(minutes_get "/api/minutes/sessions?limit=200" |
+              minutes_render resolve - "$prefix" 2>/dev/null)"
+  else
+    answer="$(minutes_render resolve "$MINUTES_VAR" "$prefix")"
+  fi
+  case "$answer" in
+    "OK "*)
+      printf '%s\n' "${answer#OK }"
+      ;;
+    MANY*)
+      red "  '$prefix' is the start of more than one meeting:" >&2
+      printf '%s\n' "$answer" | tail -n +2 | while read -r candidate; do
+        dim "    $candidate" >&2
+      done
+      dim "  Give enough of the id to pick one." >&2
+      return 1
+      ;;
+    *)
+      if [ -z "$prefix" ]; then
+        red "  No meetings have been recorded on this appliance." >&2
+      else
+        red "  Nothing recorded here starts with '$prefix'." >&2
+        dim "    roomctl minutes list      # what is actually here" >&2
+      fi
+      return 1
+      ;;
+  esac
+}
+
+cmd_minutes_status() {
+  bold "Meeting minutes"
+  if minutes_preamble; then
+    minutes_get /api/minutes/status | minutes_render status -
+  else
+    minutes_render status "$MINUTES_VAR"
+  fi
+}
+
+cmd_minutes_list() {
+  local limit="${1:-20}"
+  case "$limit" in
+    '' | *[!0-9]*)
+      red "Usage: roomctl minutes list [how many]"
+      exit 1
+      ;;
+  esac
+  bold "Meetings"
+  if minutes_preamble; then
+    minutes_get "/api/minutes/sessions?limit=${limit}" | minutes_render list - "$limit"
+  else
+    minutes_render list "$MINUTES_VAR" "$limit"
+  fi
+}
+
+cmd_minutes_show() {
+  local view=full wanted=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --transcript | -t)
+        view=transcript
+        MINUTES_BARE=1
+        ;;
+      --summary | -s)
+        view=summary
+        MINUTES_BARE=1
+        ;;
+      -*)
+        red "Unknown option '$1'."
+        dim "Use: roomctl minutes show [id] [--transcript | --summary]"
+        exit 1
+        ;;
+      *) wanted="$1" ;;
+    esac
+    shift
+  done
+
+  local id
+  id="$(minutes_resolve "$wanted")" || exit 1
+  if minutes_preamble; then
+    minutes_get "/api/minutes/sessions/${id}" | minutes_render show - "$id" "$view"
+  else
+    minutes_render show "$MINUTES_VAR" "$id" "$view"
+  fi
+}
+
+cmd_minutes_process() {
+  local id
+  id="$(minutes_resolve "${1:-}")" || exit 1
+  minutes_needs_appliance \
+    "Nothing was queued. Only the running appliance can do this: the worker" \
+    "that writes a meeting up lives inside it." || exit 1
+  minutes_send POST "/api/minutes/sessions/${id}/reprocess" | minutes_render detail -
+}
+
+cmd_minutes_delete() {
+  local yes="" wanted="" id answer
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes | -y) yes=1 ;;
+      -*)
+        red "Unknown option '$1'."
+        dim "Use: roomctl minutes delete <session-id> [--yes]"
+        exit 1
+        ;;
+      *) wanted="$1" ;;
+    esac
+    shift
+  done
+  [ -n "$wanted" ] || { red "Usage: roomctl minutes delete <session-id> [--yes]"; exit 1; }
+
+  id="$(minutes_resolve "$wanted")" || exit 1
+  local live=1
+  minutes_preamble || live=""
+
+  # Show what is about to go before asking. An id is not a meeting to anybody.
+  if [ -n "$live" ]; then
+    minutes_get "/api/minutes/sessions/${id}" | minutes_render show - "$id" facts
+  else
+    minutes_render show "$MINUTES_VAR" "$id" facts
+  fi
+
+  if [ -z "$yes" ]; then
+    printf '\nDelete this meeting — audio, transcript and summary? There is no undo. [y/N] '
+    read -r answer
+    case "$answer" in
+      y | Y | yes) ;;
+      *) dim "Cancelled. Nothing was deleted."; exit 0 ;;
+    esac
+  fi
+
+  if [ -n "$live" ]; then
+    minutes_send DELETE "/api/minutes/sessions/${id}" | minutes_render detail -
+  else
+    minutes_render remove "$MINUTES_VAR" "$id"
+  fi
+}
+
+cmd_minutes_sweep() {
+  room_load_config || true
+  local keep audio
+  keep="$(room_config MINUTES_KEEP_DAYS 30)"
+  audio="$(room_config MINUTES_KEEP_AUDIO_DAYS 0)"
+
+  bold "Retention"
+  printf '  %-11s %s\n' "meetings" "kept for $keep day(s), then deleted"
+  if [ "$audio" = "0" ]; then
+    printf '  %-11s %s\n' "audio" "deleted as soon as the meeting is transcribed"
+  else
+    printf '  %-11s %s\n' "audio" "kept for $audio day(s)"
+  fi
+  printf '  %-11s %s\n' "change it" "roomctl set MINUTES_KEEP_DAYS <days>"
+  printf '\n'
+
+  minutes_needs_appliance \
+    "Nothing was deleted. Only the running appliance applies the retention" \
+    "policy, so that it and this script can never disagree about it." || exit 1
+  minutes_send POST /api/minutes/sweep | minutes_render detail -
+}
+
+cmd_minutes_people() {
+  bold "People this room can recognise"
+  if minutes_preamble; then
+    minutes_get /api/minutes/people | minutes_render people -
+  else
+    minutes_render people "$MINUTES_VAR"
+  fi
+}
+
+cmd_minutes() {
+  room_load_config || true
+  MINUTES_PORT="$(room_config DASHBOARD_PORT 8080)"
+  MINUTES_VAR="${ROOM_APPLIANCE_VAR:-$ROOM_ROOT/var}/minutes"
+  if room_is_true "$(room_config MINUTES_ENABLED false)"; then MINUTES_ON=1; fi
+
+  local action="${1:-status}"
+  shift || true
+  case "$action" in
+    status | st) cmd_minutes_status ;;
+    list | ls) cmd_minutes_list "$@" ;;
+    show | cat) cmd_minutes_show "$@" ;;
+    process | reprocess) cmd_minutes_process "$@" ;;
+    delete | rm) cmd_minutes_delete "$@" ;;
+    sweep | prune) cmd_minutes_sweep ;;
+    people | who) cmd_minutes_people ;;
+    help | -h | --help) usage ;;
+    *)
+      red "Unknown minutes action '$action'."
+      dim "Use: status | list | show | process | delete | sweep | people"
+      exit 1
+      ;;
+  esac
+}
+
 # --------------------------------------------------------------------- main
 
 COMMAND="${1:-status}"
@@ -804,6 +1742,7 @@ case "$COMMAND" in
   calendar | cal)    cmd_calendar "$@" ;;
   pin)               cmd_pin "$@" ;;
   lan-admin | lan)   cmd_lan_admin "$@" ;;
+  minutes | mins)    cmd_minutes "$@" ;;
   update | pull)     cmd_update ;;
   reset)             cmd_reset ;;
   reboot)            dim "Rebooting…"; sudo -n systemctl reboot || sudo systemctl reboot ;;

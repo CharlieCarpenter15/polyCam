@@ -1023,6 +1023,76 @@ class MinutesService:
         self._queue.put(session_id)
         return True, "Queued. It will be written up again in a moment."
 
+    def probe_meeting_window(self) -> dict[str, Any]:
+        """Read the meeting window once and report exactly what was found.
+
+        The thing to reach for when a transcript comes back with no names on
+        the remote side. Reading Teams, Meet and Zoom means reading their HTML,
+        and they change it every few weeks; when one of them does, the appliance
+        does not break, it just quietly stops finding names. This says which
+        selector matched, how many people it could see and whether it could
+        tell who was speaking — which turns "the names have gone" into
+        something somebody can fix in an afternoon.
+
+        Deliberately admin-triggered and one-shot. It reads; it presses nothing.
+        """
+        usable, why = roster.available(self.config)
+        if not usable:
+            return {"ok": False, "error": why}
+
+        state = self.room.state()
+        active = getattr(state, "active", None)
+        if active is None:
+            return {
+                "ok": False,
+                "error": "There is no meeting on screen to read. Join one first.",
+            }
+
+        provider = str(getattr(active, "provider_id", ""))
+        try:
+            payload = self.browser.read_meeting_page(
+                roster.build_probe_script(provider), timeout=8.0
+            )
+        except Exception as exc:  # pragma: no cover - a probe must not raise
+            log.exception("minutes.probe_failed")
+            return {"ok": False, "error": f"The meeting window could not be read ({exc.__class__.__name__})."}
+
+        if not isinstance(payload, dict):
+            return {
+                "ok": False,
+                "error": "The meeting window gave no answer. The meeting page may "
+                "still be loading, or Chromium may not be reachable.",
+                "provider": provider,
+            }
+
+        participants = [str(n) for n in (payload.get("participants") or []) if str(n).strip()]
+        speaking = [str(n) for n in (payload.get("speaking") or []) if str(n).strip()]
+        found = bool(payload.get("ok")) and bool(participants or speaking)
+        log_event(
+            log, logging.INFO, "minutes.probe",
+            provider=provider, found=len(participants),
+            speaking=len(speaking), source=str(payload.get("source") or ""),
+        )
+        return {
+            "ok": found,
+            "provider": provider,
+            "participants": participants,
+            "speaking": speaking,
+            # Which selector family answered — the single most useful fact when
+            # a provider has shipped a change.
+            "source": str(payload.get("source") or ""),
+            "health": payload.get("health") or {},
+            "reason": str(payload.get("reason") or ""),
+            "error": ""
+            if found
+            else (
+                "The meeting is on screen but no participants could be read from "
+                "it. This usually means the provider has changed their page. "
+                "Remote speakers will not be named until the selectors are "
+                "updated; everything else still works."
+            ),
+        }
+
     # -- enrolment -------------------------------------------------------
     def enrol_photo(self, person_id: str, data: bytes) -> tuple[bool, str]:
         person = self.people.get(person_id)

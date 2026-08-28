@@ -722,6 +722,23 @@
       });
   }
 
+  function probeWindow(button) {
+    $("probe-result").textContent = "Reading the meeting window…";
+    R.withButton(button, function () { return R.post("/api/minutes/probe"); })
+      .then(function (data) {
+        var probe = data.probe || {};
+        var lines = [data.detail || ""];
+        if ((probe.participants || []).length) {
+          lines.push("Saw: " + probe.participants.join(", "));
+        }
+        $("probe-result").textContent = lines.filter(Boolean).join(" ");
+      })
+      .catch(function (error) {
+        $("probe-result").textContent =
+          error.message || "The meeting window could not be read.";
+      });
+  }
+
   // ------------------------------------------------------------------- wiring
 
   function wire() {
@@ -781,6 +798,7 @@
 
     $("test-email-send").addEventListener("click", function () { sendTestEmail(this); });
     $("look-now").addEventListener("click", function () { lookAtRoom(this); });
+    $("probe-window").addEventListener("click", function () { probeWindow(this); });
   }
 
   function init() {

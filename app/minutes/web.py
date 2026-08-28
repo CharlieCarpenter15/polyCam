@@ -644,6 +644,34 @@ def api_look():
     return ok(look=look, people=people, detail=detail)
 
 
+@minutes_bp.route("/api/minutes/probe", methods=["POST"])
+@require_admin
+@require_csrf
+@needs_minutes
+def api_probe():
+    """Read the meeting currently on screen and report what could be seen.
+
+    The diagnostic for the one failure this feature has that nobody notices:
+    Teams, Meet and Zoom change their pages every few weeks, and when one of
+    them does, remote speakers quietly stop being named. Nothing breaks and
+    nothing is logged as an error — the transcript simply loses its names. This
+    is how somebody finds out which selector stopped matching.
+    """
+    result = _service().probe_meeting_window() or {}
+    if not result.get("ok"):
+        return fail(result.get("error") or "The meeting window could not be read.", 409,
+                    probe=result)
+    people = result.get("participants") or []
+    speaking = result.get("speaking") or []
+    detail = f"Read {len(people)} participant" + ("" if len(people) == 1 else "s")
+    if speaking:
+        detail += f", and {', '.join(speaking)} " + (
+            "is speaking" if len(speaking) == 1 else "are speaking"
+        )
+    detail += f". Matched by: {result.get('source') or 'an unnamed selector'}."
+    return ok(probe=result, detail=detail)
+
+
 @minutes_bp.route("/api/minutes/test-email", methods=["POST"])
 @require_admin
 @require_csrf
