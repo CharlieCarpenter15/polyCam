@@ -117,6 +117,54 @@ class TestExtraction:
         assert provider.id == "teams" and url == TEAMS_URL
 
 
+#: The shape Google Calendar actually exports for a Meet event: one long
+#: DESCRIPTION holding the Meet link, then a tel.meet dial-in link, then a
+#: calendar.google.com link. Picking either of the last two would send the room
+#: to a phone-numbers page or to Google Calendar instead of the meeting.
+GOOGLE_EXPORT_DESCRIPTION = (
+    "-::~:~::~:~:~:~:~:~:~:~:~:~:~:~::~:~::-\n"
+    "Do not edit this section of the description.\n\n"
+    "This event has a video call.\n"
+    "Join: https://meet.google.com/qkj-mzrn-xub\n"
+    "(SG) +65 3138 0345 PIN: 419283746#\n"
+    "View more phone numbers: https://tel.meet/qkj-mzrn-xub?pin=8471028374619\n\n"
+    "View your event at "
+    "https://calendar.google.com/calendar/event?action=VIEW&eid=abc123\n"
+    "-::~:~::~:~:~:~:~:~:~:~:~:~:~:~::~:~::-"
+)
+
+
+class TestGoogleCalendarExport:
+    """The exact path a Google Workspace room calendar takes."""
+
+    def test_the_meet_link_is_found_in_the_description(self):
+        url, provider = extract_meeting(description=GOOGLE_EXPORT_DESCRIPTION)
+        assert provider.id == "meet"
+        assert url == "https://meet.google.com/qkj-mzrn-xub"
+
+    def test_the_dial_in_link_is_not_chosen(self):
+        url, _ = extract_meeting(description=GOOGLE_EXPORT_DESCRIPTION)
+        assert "tel.meet" not in url, "a phone-numbers page is not the meeting"
+
+    def test_the_calendar_link_is_not_chosen(self):
+        url, _ = extract_meeting(description=GOOGLE_EXPORT_DESCRIPTION)
+        assert "calendar.google.com" not in url
+
+    def test_a_room_name_in_location_does_not_confuse_it(self):
+        url, provider = extract_meeting(
+            location="Boardroom (8)", description=GOOGLE_EXPORT_DESCRIPTION
+        )
+        assert provider.id == "meet" and "meet.google.com" in url
+
+    def test_the_conference_property_is_honoured(self):
+        """Google sets X-GOOGLE-CONFERENCE, which ics.py maps onto `url`."""
+        url, provider = extract_meeting(
+            url="https://meet.google.com/qkj-mzrn-xub",
+            description=GOOGLE_EXPORT_DESCRIPTION,
+        )
+        assert provider.id == "meet" and url == "https://meet.google.com/qkj-mzrn-xub"
+
+
 class TestSafeLinks:
     def test_outlook_safelinks_is_unwrapped(self):
         wrapped = (
