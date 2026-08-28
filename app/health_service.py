@@ -19,6 +19,7 @@ import socket
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 from . import paths
 from .airplay_service import AirPlayService
@@ -56,6 +57,7 @@ class HealthService:
         poly: PolyService,
         room: MeetingService,
         system: SystemService,
+        minutes: Any = None,
     ) -> None:
         self.config = config
         self.calendar = calendar
@@ -64,6 +66,11 @@ class HealthService:
         self.poly = poly
         self.room = room
         self.system = system
+        #: Optional, and typed loosely on purpose: the meeting-minutes feature
+        #: is allowed not to exist. A caller that does not pass one gets a
+        #: report without that component, which is what every existing caller
+        #: and every existing test expects.
+        self.minutes = minutes
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -254,6 +261,9 @@ class HealthService:
             "speaker": (poly.get("speaker") or {}).get("status", UNKNOWN),
             "network": network_status,
         }
+        minutes = self._minutes_report()
+        if minutes is not None:
+            components["minutes"] = str(minutes.get("status") or UNKNOWN)
         overall = self._overall(components)
 
         with self._lock:
@@ -296,9 +306,26 @@ class HealthService:
                 "disk_free_percent": self.system.disk_free_percent(),
                 "memory_available_mb": self.system.memory_available_mb(),
             },
+            "minutes": minutes,
             "recoveries": recoveries,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def _minutes_report(self) -> dict[str, object] | None:
+        """What the meeting-minutes feature says about itself, if it is there.
+
+        Wrapped, because an optional feature must not be able to break the
+        health check that the watchdog depends on. If asking it how it is going
+        throws, that is itself worth one warning line — and nothing more.
+        """
+        if self.minutes is None:
+            return None
+        try:
+            report = self.minutes.health()
+        except Exception:  # pragma: no cover - an optional feature is not fatal
+            log.exception("health.minutes_failed")
+            return {"status": WARN, "detail": "Meeting minutes could not be asked how it is."}
+        return report if isinstance(report, dict) else None
 
     def _calendar_status(self, calendar: dict[str, object]) -> str:
         if calendar.get("source") == "none":

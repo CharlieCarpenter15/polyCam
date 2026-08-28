@@ -38,6 +38,7 @@ from typing import Any
 
 from ..background_service import detect_image_type
 from ..logging_setup import get_logger, log_event
+from ..models import FAIL, OFF, OK, WARN
 from ..store import read_json, write_json
 from . import attribute, audio, deps, faces, mailer, paths, roster, summarize, transcribe, voiceprint
 from .people import KIND_FACE, KIND_VOICE, PeopleStore
@@ -53,6 +54,9 @@ log = get_logger("minutes")
 
 #: How often the supervisor looks at the room.
 TICK_SECONDS = 2.0
+
+#: How far back a failed meeting is still worth reporting as a fault.
+RECENT_FAILURE_DAYS = 3
 
 #: Stages a session moves through, in order. Kept as plain strings because they
 #: are shown to a person in the web page and stored in a file that outlives any
@@ -757,6 +761,69 @@ class MinutesService:
                 else "Meetings in this room are recorded and summarised."
             )
         return {"enabled": True, "recording": recording, "notice": notice}
+
+    def health(self) -> dict[str, Any]:
+        """A short answer for ``/api/health``, in the shape that page expects.
+
+        Capped at "warning" on purpose. This feature is optional and nothing the
+        room does depends on it, so however badly it is going it must never be
+        the reason a room reports itself broken — an engineer looking at a red
+        appliance should be looking at the calendar, the browser or the network,
+        not at a transcript that failed to summarise.
+
+        It warns only about things somebody switched on and which are not
+        working. Something left off is not a fault.
+        """
+        if not self.enabled:
+            return {"status": OFF, "detail": "Switched off."}
+
+        troubles: list[str] = []
+        for name, (ok, why) in {
+            "recording": audio.available(self.config),
+            "summaries": summarize.available(self.config),
+            "email": mailer.available(self.config),
+            "faces": faces.available(self.config),
+            "voices": voiceprint.available(self.config),
+        }.items():
+            # available() is also how a part says "off", which is not a fault.
+            if not ok and why and "switched off" not in why.lower():
+                troubles.append(f"{name}: {why}")
+
+        recent = self._recent_failures()
+        troubles.extend(recent)
+
+        with self._lock:
+            recording = self._recording is not None
+
+        return {
+            "status": WARN if troubles else OK,
+            "detail": troubles[0] if troubles else "",
+            "troubles": troubles,
+            "recording": recording,
+            "queued": self._queue.qsize(),
+            "sessions": len(paths.list_session_ids()),
+            "people": self.people.count(),
+        }
+
+    def _recent_failures(self) -> list[str]:
+        """Meetings that were recorded but could not be written up.
+
+        Only the recent ones: a meeting that failed a fortnight ago is history,
+        not a fault to keep reporting.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_FAILURE_DAYS)
+        out: list[str] = []
+        for session_id in paths.list_session_ids()[:20]:
+            directory = paths.session_dir(session_id)
+            if directory is None:
+                continue
+            started = self._session_started(session_id, directory)
+            if started is None or started < cutoff:
+                break
+            meta = self._read_meta(directory)
+            if meta is not None and meta.stage == STAGE_FAILED:
+                out.append(f"“{meta.title or session_id}” could not be written up: {meta.error}")
+        return out[:3]
 
     def status(self) -> dict[str, Any]:
         """Everything the settings and minutes pages need to explain themselves."""

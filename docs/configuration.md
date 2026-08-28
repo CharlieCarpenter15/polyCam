@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 124 options. All have working defaults; a fresh install
+There are 125 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -161,6 +161,7 @@ needs only a calendar link.
 | `MINUTES_IDENTIFY_REMOTE` | `true` | Name remote speakers from the meeting window. Reads the participant list and the active-speaker highlight out of the Teams, Meet or Zoom page. This is by far the most reliable way to know who said something on a call, because the meeting app already knows. |
 | `MINUTES_READ_CAPTIONS` | `true` | Use the meeting's own live captions. When somebody has live captions switched on, Teams and Google Meet already write down what each remote person said and put their name on it. Reading that is far more accurate than transcribing the call audio here, and costs the Raspberry Pi nothing. |
 | `MINUTES_TURN_ON_CAPTIONS` | `false` | Switch live captions on when joining. Off by default on purpose: captions appear on the TV for everyone in the room, so switching them on is a visible change to the meeting and should be somebody's decision rather than a side effect. |
+| `MINUTES_OPEN_ROSTER` | `false` | Open the participant list when joining. Some meetings only name everyone once the participant panel is open. Off by default because the panel appears on the TV and shrinks everyone's video — a visible change to the meeting for the sake of a few more names in the transcript. _Advanced._ |
 | `MINUTES_IDENTIFY_FACES` | `false` | Recognise faces in the room (experimental). Looks at the room through the conference-bar camera between meetings and notes which enrolled colleagues are present. It cannot look during a meeting — the camera belongs to the meeting then — so the roster is whoever was seen just before the meeting started. Expect it to name most people within about two metres of the bar, to get steadily worse past three, and to see nobody at all at the far end of a long table. Backlighting, a turned head and a late arrival all defeat it. |
 | `MINUTES_IDENTIFY_VOICES` | `false` | Recognise voices in the room (experimental). Matches each in-room speaking turn against enrolled voice profiles. Genuinely hard on a far-field microphone in a room with hard walls: expect it to be useful as a suggestion you correct, not as an answer you trust. Even when it cannot name anybody it still keeps two speakers apart, which is worth having on its own — and correcting a name in a transcript afterwards is what teaches it. |
 | `MINUTES_FACE_THRESHOLD` | `0.4` | Face match threshold. How similar a face must be to count as a match. Higher is stricter: raise it if the room starts calling people by the wrong name. (min 0.05, max 0.95) _Advanced._ |

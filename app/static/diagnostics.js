@@ -26,8 +26,18 @@
   var COMPONENT_LABELS = {
     backend: "Room software", calendar: "Calendar", browser: "TV display (Chromium)",
     airplay: "AirPlay receiver", camera: "Camera", microphone: "Microphone",
-    speaker: "Speaker", network: "Network"
+    speaker: "Speaker", network: "Network", minutes: "Meeting minutes"
   };
+
+  function minutesDetail(minutes) {
+    if (!minutes) { return "not installed"; }
+    if (minutes.detail) { return minutes.detail; }
+    var parts = [];
+    if (minutes.recording) { parts.push("recording now"); }
+    if (minutes.sessions) { parts.push(minutes.sessions + " recorded"); }
+    if (minutes.people) { parts.push(minutes.people + " enrolled"); }
+    return parts.join(", ");
+  }
 
   function loadHealth() {
     return R.get("/api/health").then(function (health) {
@@ -40,6 +50,9 @@
         microphone: ((health.poly || {}).microphone || {}).description || "",
         speaker: ((health.poly || {}).speaker || {}).description || "",
         network: ((health.network || {}).addresses || []).join(", "),
+        // The feature explains itself in a sentence; show that rather than
+        // making somebody go and read a second page to find out what is wrong.
+        minutes: minutesDetail(health.minutes),
         backend: "up " + Math.round((health.backend || {}).uptime_seconds / 60) + " min, v" +
           ((health.backend || {}).version || "?")
       };

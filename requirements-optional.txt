@@ -3,37 +3,11 @@
 # The appliance runs fine without this: remote_service degrades to a no-op.
 evdev==1.7.1
 
-# ---------------------------------------------------------------------------
-# Meeting minutes (app/minutes). Every one of these is optional: with none of
-# them installed the feature reports exactly what is missing and the rest of
-# the appliance is unaffected. Install only the parts you actually want.
-# ---------------------------------------------------------------------------
-
-# Writing the summary. Pure Python, so it installs anywhere.
-anthropic==1.2.0
-
-# Comparing faces and voices, and reading audio files.
-numpy==2.2.6
-soundfile==0.13.1
-
-# Finding and recognising faces. The plain build, not contrib: the detector and
-# recogniser used (YuNet and SFace) are in OpenCV's core objdetect module.
-opencv-python-headless==5.0.0.93
-
-# Offline speech-to-text. Pick one — see docs/meeting-minutes.md.
-#   faster-whisper is the more accurate and the larger (~300-500 MB with its
-#   CUDA-less runtime); vosk is small and fast and has no punctuation.
-#   whisper.cpp is not a Python package at all: it is a binary, and it is the
-#   recommended engine on a Raspberry Pi.
-faster-whisper==1.1.1
-vosk==0.3.45
-
-# Splitting recorded audio into speech turns before fingerprinting a voice.
-# Note the "-wheels" suffix: the original webrtcvad publishes no ARM wheel and
-# would have to be compiled on the Pi. The import name is the same.
-webrtcvad-wheels==2.0.14
-
-# Recognising voices. Bundles its own ONNX runtime, so this is the whole
-# dependency — no PyTorch, no compiler. Needs a speaker-embedding model in
-# var/minutes/models; see docs/meeting-minutes.md.
-sherpa-onnx==1.12.14
+# The meeting-minutes feature has its own extras in requirements-minutes.txt.
+# They are deliberately NOT here: this file is installed on every appliance,
+# and those are hundreds of megabytes of machine-learning wheels that most
+# rooms will never switch on. Install them with:
+#
+#     scripts/install-minutes.sh
+#
+# or by hand into the appliance's virtualenv.

@@ -1,0 +1,44 @@
+# Optional extras for the meeting-minutes feature (app/minutes).
+#
+# NOT installed by default, and not installed by scripts/install.sh unless it is
+# given --with-minutes. Between them these come to several hundred megabytes,
+# and a room that only wants a dashboard and a Join button should never pay for
+# that. Install them with scripts/install-minutes.sh, which also fetches the
+# model files the recognisers need.
+#
+# Every one of them is genuinely optional. With none installed the feature
+# reports exactly what is missing and the rest of the appliance is unaffected.
+
+# -- Writing the summary ----------------------------------------------------
+# Pure Python, so it installs anywhere and costs almost nothing.
+anthropic==1.2.0
+
+# -- Comparing faces and voices ---------------------------------------------
+numpy==2.2.6
+
+# -- Recognising faces ------------------------------------------------------
+# The plain build, not "contrib": the detector and recogniser used here (YuNet
+# and SFace) are in OpenCV's core objdetect module, and contrib is three times
+# the size for nothing this needs.
+opencv-python-headless==5.0.0.93
+
+# -- Recognising voices -----------------------------------------------------
+# sherpa-onnx bundles its own ONNX runtime, so this is the whole dependency:
+# no PyTorch, no compiler. It needs a speaker-embedding model on disk.
+sherpa-onnx==1.12.14
+
+# Splitting recorded audio into speech turns. Note the "-wheels" suffix: plain
+# webrtcvad publishes no ARM wheel and would have to be compiled on the Pi. The
+# import name is the same. Without it the appliance finds speech by loudness
+# alone, which is too rough to put a name to anybody.
+webrtcvad-wheels==2.0.14
+
+# -- Speech to text ---------------------------------------------------------
+# Only needed if you want a Python engine. The recommended engine on a Pi is
+# whisper.cpp, which is a binary rather than a package and is installed by
+# scripts/install-minutes.sh.
+#
+# faster-whisper is the more accurate and by far the larger (300-500 MB with
+# its runtime). vosk is small and quick and has no punctuation.
+faster-whisper==1.1.1
+vosk==0.3.45

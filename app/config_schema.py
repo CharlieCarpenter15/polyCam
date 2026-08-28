@@ -1239,6 +1239,18 @@ FIELDS: tuple[Field, ...] = (
         "and should be somebody's decision rather than a side effect.",
     ),
     Field(
+        key="MINUTES_OPEN_ROSTER",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Open the participant list when joining",
+        help="Some meetings only name everyone once the participant panel is "
+        "open. Off by default because the panel appears on the TV and shrinks "
+        "everyone's video — a visible change to the meeting for the sake of a "
+        "few more names in the transcript.",
+        advanced=True,
+    ),
+    Field(
         key="MINUTES_IDENTIFY_FACES",
         type="bool",
         default=False,

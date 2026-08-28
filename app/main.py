@@ -89,6 +89,11 @@ class RoomAppliance:
         self.room = MeetingService(
             config, self.calendar, self.browser, self.airplay, self.poly, self.system
         )
+        # Reads the room's state; never writes to it. Inert unless switched on.
+        # Built before the health service so that it can be reported on.
+        self.minutes = MinutesService(
+            config, self.calendar, self.room, self.poly, self.browser
+        )
         self.health = HealthService(
             config,
             self.calendar,
@@ -97,12 +102,9 @@ class RoomAppliance:
             self.poly,
             self.room,
             self.system,
+            minutes=self.minutes,
         )
         self.remote = RemoteService(config, self._on_remote_action)
-        # Reads the room's state; never writes to it. Inert unless switched on.
-        self.minutes = MinutesService(
-            config, self.calendar, self.room, self.poly, self.browser
-        )
         self._started = False
         config.on_change(self._on_config_change)
 

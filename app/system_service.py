@@ -283,11 +283,24 @@ class SystemService:
         return None
 
     def disk_free_percent(self, path: str = "/") -> float | None:
+        """How much of the space this appliance can actually use is still free.
+
+        Divided by what is addressable — used plus free — and not by the size of
+        the filesystem. Those are different numbers: ``free`` is what a non-root
+        process may have, while ``total`` includes the blocks the filesystem
+        reserves for root, and on a thin-provisioned or shared volume they can
+        differ enormously. Dividing by ``total`` under-reports free space, which
+        on one machine here read 11% free when 77% was genuinely available —
+        enough to make a guard refuse to write on a perfectly healthy disk.
+        """
         try:
             usage = shutil.disk_usage(path)
-            return round(100.0 * usage.free / usage.total, 1) if usage.total else None
         except OSError:
             return None
+        addressable = usage.used + usage.free
+        if addressable <= 0:
+            return None
+        return round(100.0 * usage.free / addressable, 1)
 
     def memory_available_mb(self) -> float | None:
         try:

@@ -432,6 +432,12 @@ MINUTES_READ_CAPTIONS: true
 # be somebody's decision rather than a side effect.
 MINUTES_TURN_ON_CAPTIONS: false
 
+# Some meetings only name everyone once the participant panel is open. Off
+# by default because the panel appears on the TV and shrinks everyone's
+# video — a visible change to the meeting for the sake of a few more names
+# in the transcript.
+MINUTES_OPEN_ROSTER: false
+
 # Looks at the room through the conference-bar camera between meetings and
 # notes which enrolled colleagues are present. It cannot look during a
 # meeting — the camera belongs to the meeting then — so the roster is

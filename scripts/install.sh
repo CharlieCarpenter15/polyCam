@@ -14,6 +14,8 @@
 #     --room "Name"     set the room name
 #     --calendar URL    set the calendar ICS link
 #     --unattended      never prompt; use defaults for everything
+#     --with-minutes    also install the meeting-minutes extras and models
+#                       (several hundred MB; see docs/meeting-minutes.md)
 #
 # What it does, in order:
 #   1. checks it is running on something sensible, as the right user
@@ -36,6 +38,7 @@ cd "$ROOT" || { printf 'Cannot enter %s\n' "$ROOT"; exit 1; }
 DO_APT=1
 DO_UXPLAY=1
 DO_LAN_ADMIN=1
+DO_MINUTES=0
 UNATTENDED=0
 SET_PIN=""
 SET_ROOM=""
@@ -46,11 +49,12 @@ while [ $# -gt 0 ]; do
     --no-apt) DO_APT=0 ;;
     --no-uxplay) DO_UXPLAY=0 ;;
     --no-lan-admin) DO_LAN_ADMIN=0 ;;
+    --with-minutes) DO_MINUTES=1 ;;
     --unattended) UNATTENDED=1 ;;
     --pin) SET_PIN="${2:-}"; shift ;;
     --room) SET_ROOM="${2:-}"; shift ;;
     --calendar) SET_CALENDAR="${2:-}"; shift ;;
-    -h | --help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1"; exit 1 ;;
   esac
   shift
@@ -221,6 +225,22 @@ else
   warn "evdev could not be built; the Poly remote will be unavailable."
   info "To fix later: sudo apt install python3-dev build-essential"
   info "              .venv/bin/pip install -r requirements-optional.txt"
+fi
+
+# The meeting-minutes extras are hundreds of megabytes of machine-learning
+# wheels plus the model files that go with them, and most rooms never switch
+# the feature on. They are installed only when asked for.
+if [ "$DO_MINUTES" -eq 1 ]; then
+  if "$HERE/install-minutes.sh" --quiet; then
+    good "installed the meeting-minutes extras and models"
+  else
+    warn "the meeting-minutes extras could not be installed."
+    info "The rest of the appliance is unaffected. To retry:"
+    info "              scripts/install-minutes.sh"
+  fi
+else
+  info "Meeting minutes not installed (add --with-minutes, or run"
+  info "              scripts/install-minutes.sh later)."
 fi
 
 # ------------------------------------------------------------- 4. uxplay
