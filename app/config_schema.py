@@ -621,6 +621,18 @@ FIELDS: tuple[Field, ...] = (
         restart_units=("room-kiosk.service",),
     ),
     Field(
+        key="CHROMIUM_RENDER_MODE",
+        type="choice",
+        default="auto",
+        choices=("auto", "wayland", "x11", "software"),
+        group="display",
+        label="How Chromium draws to the TV",
+        help="Fix for a blank or white screen. “auto” detects Wayland (the "
+        "default on Raspberry Pi OS Bookworm). Try “wayland”, then “x11”, then "
+        "“software” — software always renders but without GPU acceleration.",
+        restart_units=("room-kiosk.service",),
+    ),
+    Field(
         key="CHROMIUM_EXTRA_ARGS",
         type="str",
         default="",

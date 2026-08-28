@@ -25,6 +25,7 @@ DEBUG_PORT="$(room_config CHROMIUM_DEBUG_PORT 9222)"
 DASHBOARD_PORT="$(room_config DASHBOARD_PORT 8080)"
 BINARY_SETTING="$(room_config CHROMIUM_BINARY auto)"
 EXTRA_ARGS="$(room_config CHROMIUM_EXTRA_ARGS '')"
+RENDER_MODE="$(room_config CHROMIUM_RENDER_MODE auto)"
 HIDE_CURSOR="$(room_config HIDE_CURSOR true)"
 ALLOW_BLANKING="$(room_config SCREEN_BLANKING false)"
 KIOSK_ENABLED="$(room_config KIOSK_ENABLED true)"
@@ -161,11 +162,16 @@ fi
 #   --auto-accept-camera-...     : no permission prompt for a room with no mouse
 #   --disable-session-crashed-*  : never show "restore pages?" on the TV
 #   --password-store=basic       : no desktop keyring prompt on a headless login
-# shellcheck disable=SC2054  # the commas belong inside --disable-features values
+#
+# Chromium's feature lists are built as single variables below. Passing
+# --enable-features twice does NOT merge the two lists: the last one silently
+# wins and the earlier features are lost.
+ENABLE_FEATURES="WebRTCPipeWireCapturer"
+DISABLE_FEATURES="Translate,TranslateUI,AutofillServerCommunication,MediaRouter"
+
 ARGS=(
   --kiosk
   --start-fullscreen
-  --start-maximized
   --user-data-dir="$PROFILE_DIR"
   --remote-debugging-port="$DEBUG_PORT"
   --remote-debugging-address=127.0.0.1
@@ -174,7 +180,6 @@ ARGS=(
   --auto-accept-camera-and-microphone-capture
   --disable-session-crashed-bubble
   --disable-infobars
-  --disable-features=Translate,TranslateUI,AutofillServerCommunication,MediaRouter
   --no-first-run
   --no-default-browser-check
   --disable-pinch
@@ -184,14 +189,43 @@ ARGS=(
   --check-for-update-interval=31536000
   --noerrdialogs
   --disable-notifications
-  --enable-features=WebRTCPipeWireCapturer
 )
 
-if room_is_true "$HIDE_CURSOR"; then
-  # Chromium on Wayland has no cursor-hiding flag; unclutter (X11) covers that
-  # case above. This keeps the pointer out of the way where supported.
-  ARGS+=(--enable-blink-features=)
-fi
+# ------------------------------------------------- renderer and compositor
+#
+# A white or blank kiosk window is almost always Chromium and the compositor
+# disagreeing rather than anything wrong with the page. Raspberry Pi OS
+# Bookworm runs labwc (Wayland) by default on a Pi 5, and Chromium has to be
+# told to use it or it can open a window that never paints.
+#
+# "software" is the last resort: slower, no GPU, but it always draws something.
+case "$RENDER_MODE" in
+  wayland)
+    ARGS+=(--ozone-platform=wayland)
+    ENABLE_FEATURES="$ENABLE_FEATURES,UseOzonePlatform"
+    room_log "kiosk.render_mode" "mode=wayland"
+    ;;
+  x11)
+    ARGS+=(--ozone-platform=x11)
+    room_log "kiosk.render_mode" "mode=x11"
+    ;;
+  software)
+    ARGS+=(--disable-gpu --disable-gpu-compositing)
+    room_log "kiosk.render_mode" "mode=software" "note=no GPU acceleration"
+    ;;
+  *)
+    # auto: let Chromium pick, but tell it Wayland exists when it does.
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+      ARGS+=(--ozone-platform-hint=auto)
+      room_log "kiosk.render_mode" "mode=auto" "detected=wayland"
+    else
+      room_log "kiosk.render_mode" "mode=auto" "detected=x11"
+    fi
+    ;;
+esac
+
+ARGS+=("--enable-features=$ENABLE_FEATURES")
+ARGS+=("--disable-features=$DISABLE_FEATURES")
 
 if [ -n "$EXTRA_ARGS" ]; then
   # shellcheck disable=SC2206  # deliberate word splitting of admin-supplied args

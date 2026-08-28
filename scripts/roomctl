@@ -7,6 +7,7 @@
 # that is broken.
 #
 #   roomctl status                     how is the room?
+#   roomctl screen                     why is the TV blank / white / wrong?
 #   roomctl doctor                     run every hardware check
 #   roomctl restart [what]             browser | airplay | remote | backend | all
 #   roomctl start|stop [what]
@@ -36,7 +37,7 @@ dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 green(){ printf '\033[32m%s\033[0m\n' "$*"; }
 
-usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; }
 
 py() {
   local python
@@ -136,6 +137,82 @@ cmd_panel() {
     dim "  http://127.0.0.1:${port}/panel   (this Pi only)"
     dim "  To reach it from a phone:  roomctl lan-admin on"
   fi
+}
+
+cmd_screen() {
+  # Answers one question: is the TV blank because the page did not load, or
+  # because Chromium loaded it and failed to draw it? Those need different
+  # fixes, and guessing between them wastes a lot of time.
+  room_load_config || true
+  local dash_port debug_port url mode session
+  dash_port="$(room_config DASHBOARD_PORT 8080)"
+  debug_port="$(room_config CHROMIUM_DEBUG_PORT 9222)"
+  mode="$(room_config CHROMIUM_RENDER_MODE auto)"
+
+  if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    session="wayland ($WAYLAND_DISPLAY)"
+  elif [ -n "${DISPLAY:-}" ]; then
+    session="x11 ($DISPLAY)"
+  else
+    session="none visible from this shell"
+  fi
+
+  bold "What is on the TV"
+  printf '  render mode : %s\n' "$mode"
+  printf '  session     : %s\n' "$session"
+
+  if curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:${dash_port}/"; then
+    printf '  backend     : \033[32manswering\033[0m on port %s\n' "$dash_port"
+  else
+    printf '  backend     : \033[31mNOT answering\033[0m on port %s\n' "$dash_port"
+    printf '\n'
+    dim "The room software is down, so there is no page to show."
+    dim "  roomctl restart backend"
+    dim "  roomctl logs backend"
+    return 1
+  fi
+
+  if ! curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:${debug_port}/json/version"; then
+    printf '  chromium    : \033[31mnot answering\033[0m on the debug port\n'
+    printf '\n'
+    dim "Chromium is not running, or not running our kiosk profile."
+    dim "  roomctl restart browser"
+    dim "  roomctl logs browser"
+    return 1
+  fi
+  printf '  chromium    : \033[32mrunning\033[0m\n'
+
+  url="$(curl -sf --max-time 5 "http://127.0.0.1:${debug_port}/json/list" |
+         grep -o '"url": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"$//')"
+  printf '  showing     : %s\n\n' "${url:-unknown}"
+
+  # Match the dashboard's own port, not merely "some localhost URL". Chromium
+  # keeps the *requested* URL in /json/list even when the load failed, so a
+  # dead port on 127.0.0.1 would otherwise be reported as a healthy page and
+  # send you chasing a rendering problem that does not exist.
+  case "$url" in
+    chrome-error* | about:blank | "")
+      bold "The page never loaded."
+      dim "Chromium most likely started before the backend was ready."
+      dim "  roomctl restart browser"
+      ;;
+    "http://127.0.0.1:${dash_port}/"* | "http://localhost:${dash_port}/"*)
+      bold "The correct page IS loaded."
+      dim "So a white or blank screen is Chromium failing to draw, not a problem"
+      dim "with the page. Try these in order, checking the TV after each:"
+      printf '\n'
+      dim "  roomctl set CHROMIUM_RENDER_MODE wayland  && roomctl restart browser"
+      dim "  roomctl set CHROMIUM_RENDER_MODE x11      && roomctl restart browser"
+      dim "  roomctl set CHROMIUM_RENDER_MODE software && roomctl restart browser"
+      printf '\n'
+      dim "\"software\" has no GPU acceleration but always draws something. If it"
+      dim "works, the other two tell you it is a compositor mismatch."
+      ;;
+    *)
+      bold "Chromium is on an unexpected page."
+      dim "  roomctl restart browser"
+      ;;
+  esac
 }
 
 cmd_units() {
@@ -353,6 +430,7 @@ shift || true
 
 case "$COMMAND" in
   status | st)       cmd_status ;;
+  screen | tv)       cmd_screen ;;
   panel | url)       cmd_panel ;;
   doctor | check)    cmd_doctor ;;
   restart)           cmd_units restart "$@" ;;

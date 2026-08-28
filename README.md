@@ -470,6 +470,32 @@ Or from a terminal:
 ./scripts/roomctl restart all   # restart everything
 ```
 
+### The TV is white, blank, or grey
+
+Start here — it tells you which of two very different problems you have:
+
+```bash
+./scripts/roomctl screen
+```
+
+It reports whether the backend is answering, whether Chromium is running, and
+**which page Chromium actually has open**. That last part is the whole answer:
+
+* *"The page never loaded"* — Chromium started before the backend was ready.
+  `./scripts/roomctl restart browser`.
+* *"The correct page IS loaded"* — the page is fine and Chromium is failing to
+  draw it. This is a compositor mismatch, common on a Pi 5 because Raspberry Pi
+  OS Bookworm runs labwc (Wayland). Work down these, checking the TV after each:
+
+  ```bash
+  ./scripts/roomctl set CHROMIUM_RENDER_MODE wayland  && ./scripts/roomctl restart browser
+  ./scripts/roomctl set CHROMIUM_RENDER_MODE x11      && ./scripts/roomctl restart browser
+  ./scripts/roomctl set CHROMIUM_RENDER_MODE software && ./scripts/roomctl restart browser
+  ```
+
+  `software` has no GPU acceleration but always draws something, so it is the
+  one to reach for if you just need the room working today.
+
 ### The TV is blank or shows a desktop
 
 ```bash
@@ -834,6 +860,7 @@ The most useful ones:
 | `MICROPHONE_DEVICE` / `SPEAKER_DEVICE` / `CAMERA_DEVICE` | `auto` | `auto` finds the Poly bar |
 | `POLY_ANSWER_KEY` etc. | `KEY_ENTER` etc. | Remote button mapping |
 | `BACKGROUND_MODE` | `theme` | `theme`, `slideshow` or `solid` |
+| `CHROMIUM_RENDER_MODE` | `auto` | Fix for a blank screen: `auto`, `wayland`, `x11`, `software` |
 | `DASHBOARD_PORT` | `8080` | |
 | `ADMIN_LAN_ACCESS` / `ADMIN_PIN` | `false` / *(empty)* | Access from a phone |
 | `LOG_LEVEL` | `INFO` | |
@@ -979,6 +1006,7 @@ A test fails if you forget.
 
 ```bash
 ./scripts/roomctl status              how is the room?
+./scripts/roomctl screen              why is the TV blank / white / wrong?
 ./scripts/roomctl doctor              full hardware check
 ./scripts/roomctl panel               the control-panel address and PIN status
 

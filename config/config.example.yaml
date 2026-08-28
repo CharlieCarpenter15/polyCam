@@ -211,6 +211,12 @@ CHROMIUM_BINARY: auto
 # Used by the appliance to drive the browser. Never exposed off the Pi.
 CHROMIUM_DEBUG_PORT: 9222
 
+# Fix for a blank or white screen. “auto” detects Wayland (the default on
+# Raspberry Pi OS Bookworm). Try “wayland”, then “x11”, then “software” —
+# software always renders but without GPU acceleration.
+# options: auto, wayland, x11, software
+CHROMIUM_RENDER_MODE: auto
+
 CHROMIUM_EXTRA_ARGS: ''
 
 HIDE_CURSOR: true
