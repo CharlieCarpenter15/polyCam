@@ -445,7 +445,6 @@ class TestStreamingPersistence:
         def look():
             seen["roster"] = (tmp_path / roster.ROSTER_FILE).exists()
             seen["captions"] = (tmp_path / roster.CAPTIONS_FILE).exists()
-            return None
 
         browser = FakeBrowser(
             drains=[
@@ -779,7 +778,6 @@ class TestSampler:
             def read_meeting_page(self, script, *, timeout=6.0):
                 self.entered.set()
                 self.release.wait(timeout=10)
-                return None
 
         browser = Blocking()
         sampler = RosterSampler(reading, browser)

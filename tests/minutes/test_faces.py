@@ -79,7 +79,7 @@ class FakeDetector:
         self.sizes: list[tuple[int, int]] = []
         self.calls = 0
 
-    def setInputSize(self, size):  # noqa: N802 - OpenCV's spelling
+    def setInputSize(self, size):
         self.sizes.append(size)
 
     def detect(self, frame):
@@ -93,7 +93,7 @@ class FakeRecogniser:
     def __init__(self) -> None:
         self.crops = 0
 
-    def alignCrop(self, frame, row):  # noqa: N802 - OpenCV's spelling
+    def alignCrop(self, frame, row):
         self.crops += 1
         return row
 
@@ -109,7 +109,7 @@ class FakeCapture:
         self.reads = 0
         self.released = False
 
-    def isOpened(self):  # noqa: N802 - OpenCV's spelling
+    def isOpened(self):
         return self._opened
 
     def set(self, prop, value):
@@ -153,15 +153,15 @@ class FakeCv2:
         self.detector_path = ""
         self.recogniser_path = ""
 
-    def FaceDetectorYN_create(self, path, config, size, score, nms, top_k):  # noqa: N802
+    def FaceDetectorYN_create(self, path, config, size, score, nms, top_k):
         self.detector_path = path
         return self.detector
 
-    def FaceRecognizerSF_create(self, path, config):  # noqa: N802
+    def FaceRecognizerSF_create(self, path, config):
         self.recogniser_path = path
         return self.recogniser
 
-    def VideoCapture(self, path, api):  # noqa: N802
+    def VideoCapture(self, path, api):
         self.opened_paths.append(path)
         return self.captures.pop(0) if self.captures else FakeCapture(opened=False)
 
@@ -182,7 +182,7 @@ class FakeNumpy:
 
     uint8 = "uint8"
 
-    class ndarray:  # noqa: N801 - numpy's spelling
+    class ndarray:
         pass
 
     @staticmethod
@@ -687,7 +687,7 @@ class TestLookAtRoom:
         self, face_config, store, models, installed, sysfs, quick, monkeypatch
     ):
         class Broken(FakeCv2):
-            def FaceDetectorYN_create(self, *args):  # noqa: N802
+            def FaceDetectorYN_create(self, *args):
                 raise RuntimeError("truncated file")
 
         install(monkeypatch, Broken())
@@ -699,7 +699,7 @@ class TestLookAtRoom:
         self, face_config, store, models, installed, sysfs, quick, monkeypatch
     ):
         class Exploding(FakeCv2):
-            def VideoCapture(self, path, api):  # noqa: N802
+            def VideoCapture(self, path, api):
                 raise OSError("the USB bus went away")
 
         install(

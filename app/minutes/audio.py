@@ -253,7 +253,7 @@ def record_sample(config: Any, seconds: int) -> tuple[Path | None, str]:
     device, notice = _resolve_room(config, _source_names())
     argv = parecord_argv(_recorder_binary(), device, STREAM_ROOM, target)
     try:
-        process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+        process = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -475,7 +475,7 @@ class Recorder:
         except OSError:
             errors = None
         try:
-            process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            process = subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

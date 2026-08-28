@@ -31,7 +31,7 @@ single origin is the only way that survives a clock adjustment mid-meeting.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 #: Where a voice came from. The room microphone hears the people physically
@@ -333,8 +333,19 @@ def _clock(seconds: float) -> str:
 
 
 def new_session_id(now: datetime | None = None, *, token: str = "") -> str:
-    """A sortable, collision-resistant id: ``YYYYMMDD-HHMMSS-xxxxxxxx``."""
+    """A sortable, collision-resistant id: ``YYYYMMDD-HHMMSS-xxxxxxxx``.
+
+    In UTC, always. The timestamp in the id is not decoration — the retention
+    sweep reads a session's age straight out of its name rather than opening
+    every meta file on disk — so the clock that writes it and the clock that
+    reads it have to be the same one. Writing local time and reading UTC put
+    every recording in Singapore eight hours into the future, which a sweep
+    would have quietly obeyed.
+    """
     import secrets
 
-    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc)
+    stamp = moment.strftime("%Y%m%d-%H%M%S")
     return f"{stamp}-{token or secrets.token_hex(4)}"

@@ -971,7 +971,7 @@ _OBSERVER_JS = r"""
         // as its own line. Python folds the two back together.
         text = best;
       } else if (recentlySaid(speaker, text)) {
-          // Dropping the rare genuine repeat costs a "Yes."; keeping it would
+        // Dropping the rare genuine repeat costs a "Yes."; keeping it would
         // duplicate whole sentences.
         continue;
       }

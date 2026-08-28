@@ -321,8 +321,8 @@ def embed_image(data: bytes, config: ConfigManager) -> tuple[list[float], str, s
         if reason := _models_missing():
             return [], "", reason
 
-        import cv2  # noqa: PLC0415 - optional dependency, imported where used
-        import numpy as np  # noqa: PLC0415
+        import cv2
+        import numpy as np
 
         frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
         if frame is None:
@@ -394,7 +394,7 @@ def look_at_room(config: ConfigManager, store: Any) -> RoomLook:
             log_event(log, logging.DEBUG, "minutes.faces.unavailable", reason=why)
             return look
 
-        import cv2  # noqa: PLC0415 - optional dependency, imported where used
+        import cv2
 
         detector, recogniser, reason = _load_models(cv2)
         if reason:

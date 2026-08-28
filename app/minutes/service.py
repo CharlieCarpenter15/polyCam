@@ -665,7 +665,12 @@ class MinutesService:
 
     @staticmethod
     def _session_started(session_id: str, directory: Path) -> datetime | None:
-        """When a session began, from its id — no file read required."""
+        """When a session began, from its id — no file read required.
+
+        The id's timestamp is UTC (see ``new_session_id``), which is what makes
+        this readable without opening anything. A directory whose name predates
+        that rule, or is not one of ours at all, falls back to its own mtime.
+        """
         try:
             stamp = datetime.strptime(session_id[:15], "%Y%m%d-%H%M%S")
         except ValueError:

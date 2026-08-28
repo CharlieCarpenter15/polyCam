@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.minutes import paths as mpaths
-from app.minutes import service as svc_module
 from app.minutes.service import (
     STAGE_CAPTURED,
     STAGE_RECORDING,
@@ -23,10 +22,7 @@ from app.minutes.service import (
 )
 from app.minutes.transcript import (
     SOURCE_MANUAL,
-    TRACK_ROOM,
-    Segment,
     SessionMeta,
-    Transcript,
 )
 
 

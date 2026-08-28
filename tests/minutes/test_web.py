@@ -19,7 +19,6 @@ never reach a browser, and a photo must never be located from a request string
 
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import struct
