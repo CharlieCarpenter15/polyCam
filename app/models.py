@@ -38,6 +38,10 @@ class Meeting:
     join_url: str = ""
     cancelled: bool = False
     private: bool = False
+    #: Invitee email addresses, when the calendar feed carries them. Kept off
+    #: ``to_dict`` on purpose: the dashboard is readable from the LAN and an
+    #: attendee list is not something a room screen needs to hand out.
+    attendees: list[str] = field(default_factory=list)
 
     # -- derived ---------------------------------------------------------
     @property

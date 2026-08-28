@@ -521,19 +521,31 @@ class PolyService:
             self.refresh_now()
         return results
 
+    #: Streams belonging to the appliance itself, which must be left where they
+    #: are. A meeting recorder deliberately listens to the speaker's monitor
+    #: rather than the microphone, so "move everything onto the new default"
+    #: would silently repoint it at the wrong device and the far-end track would
+    #: quietly become a second copy of the room. The recorder labels its own
+    #: streams so they can be recognised here.
+    OWN_STREAM_PREFIX = "room-minutes"
+
     def _move_existing_streams(self, list_kind: str, move_command: str, target: str) -> None:
         """Move already-playing/recording streams onto the new default.
 
         Chromium grabs a device when it starts; without this, changing the
-        default has no effect until the browser restarts.
+        default has no effect until the browser restarts. The appliance's own
+        recordings are skipped — see ``OWN_STREAM_PREFIX``.
         """
         listing = run(["pactl", "list", "short", list_kind], timeout=10)
         if not listing.ok:
             return
         for line in listing.stdout.splitlines():
             stream_id = line.split("\t")[0].strip()
-            if stream_id.isdigit():
-                run(["pactl", move_command, stream_id, target], timeout=8)
+            if not stream_id.isdigit():
+                continue
+            if self.OWN_STREAM_PREFIX in line.lower():
+                continue
+            run(["pactl", move_command, stream_id, target], timeout=8)
 
     # -- levels ----------------------------------------------------------
     def _read_levels(

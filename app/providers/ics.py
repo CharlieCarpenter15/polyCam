@@ -240,7 +240,8 @@ class IcsCalendarProvider(CalendarProvider):
         )
 
         status = (self._text(component.get("STATUS")) or "").upper()
-        organizer = self._text(component.get("ORGANIZER")).replace("mailto:", "").replace("MAILTO:", "")
+        organizer = self._address(component.get("ORGANIZER"))
+        attendees = self._addresses(component.get("ATTENDEE"))
         classification = (self._text(component.get("CLASS")) or "").upper()
 
         uid = self._text(component.get("UID")) or f"{title}-{start.isoformat()}"
@@ -259,6 +260,7 @@ class IcsCalendarProvider(CalendarProvider):
             join_url=join_url or "",
             cancelled=status == "CANCELLED",
             private=classification in ("PRIVATE", "CONFIDENTIAL"),
+            attendees=attendees,
         )
 
     @staticmethod
@@ -281,6 +283,44 @@ class IcsCalendarProvider(CalendarProvider):
             return str(value).strip()
         except Exception:
             return ""
+
+    @classmethod
+    def _address(cls, value: Any) -> str:
+        """One CAL-ADDRESS as a plain email address.
+
+        ``mailto:`` is stripped because every consumer of this wants an address
+        to show or to send to, and none of them wants the scheme.
+        """
+        text = cls._text(value)
+        if text.lower().startswith("mailto:"):
+            text = text[7:]
+        return text.strip()
+
+    @classmethod
+    def _addresses(cls, value: Any) -> list[str]:
+        """Every ATTENDEE on an event, deduplicated, in the order given.
+
+        ``icalendar`` hands back a single value when a property appears once and
+        a list when it repeats, so both shapes have to be handled. Anything that
+        is not an email address — a room resource, a mailing list expressed as a
+        URI — is dropped rather than passed on to something that will try to
+        send mail to it.
+        """
+        if value is None:
+            return []
+        items = value if isinstance(value, (list, tuple)) else [value]
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            address = cls._address(item)
+            if "@" not in address or " " in address:
+                continue
+            key = address.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(address)
+        return out
 
     @staticmethod
     def _is_all_day(component: Any) -> bool:

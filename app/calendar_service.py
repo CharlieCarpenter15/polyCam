@@ -266,6 +266,7 @@ class CalendarService:
                     "join_url": m.join_url,
                     "cancelled": m.cancelled,
                     "private": m.private,
+                    "attendees": list(m.attendees),
                 }
                 for m in snapshot.meetings
             ],
@@ -318,6 +319,9 @@ class CalendarService:
                         join_url=str(row.get("join_url") or ""),
                         cancelled=bool(row.get("cancelled")),
                         private=bool(row.get("private")),
+                        attendees=[
+                            str(a) for a in (row.get("attendees") or []) if str(a).strip()
+                        ],
                     )
                 )
             except (KeyError, TypeError, ValueError):

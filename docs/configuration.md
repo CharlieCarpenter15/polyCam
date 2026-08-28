@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 89 options. All have working defaults; a fresh install
+There are 124 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -142,6 +142,46 @@ needs only a calendar link.
 | `AUTO_UPDATE_ON_BOOT` | `true` | Update the room software when it boots. Pulls the latest version from the repository this room was installed from, before the dashboard starts. A room that cannot reach the repository, or whose files have been edited on the Pi, simply keeps the version it has — updating never stops the room starting. |
 | `AUTO_UPDATE_BRANCH` | empty | Branch to update from. Empty follows whichever branch the Pi is on. Only fast-forward updates are taken, so a branch that has diverged is left alone. _Advanced._ |
 | `DAILY_RESTART_TIME` | empty | Daily quiet-hours restart. Optional HH:MM (24-hour) at which the room software restarts itself while nobody is around, e.g. 04:30. Empty disables it. |
+
+## Meeting minutes (experimental)
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `MINUTES_ENABLED` | `false` | Record and write up meetings. The master switch. With this off nothing below runs, nothing is recorded, and the appliance behaves exactly as it did before. |
+| `MINUTES_SHOW_RECORDING_NOTICE` | `true` | Show “this meeting is being recorded” on the TV. A badge on the room screen for as long as a recording is running. Leave this on. People are entitled to know, and a room that tells them is a room they keep trusting. |
+| `MINUTES_RECORD_ROOM` | `true` | Record the room microphone. The people physically in the room, from the conference bar. |
+| `MINUTES_RECORD_FAR_END` | `true` | Record what the room hears. Everyone dialled in, taken from the speaker's own output. Recorded as a second, separate track — which is what lets the transcript say for certain whether a voice was in the room or on the call. |
+| `MINUTES_MIN_MEETING_SECONDS` | `120` | Ignore meetings shorter than (seconds). A meeting joined and left again in half a minute is a misfire, not a meeting. Below this it is deleted rather than written up. (min 0, max 3600) |
+| `MINUTES_MAX_MEETING_MINUTES` | `240` | Stop recording after (minutes). A guard against a meeting nobody ever left filling the SD card. (min 5, max 1440) _Advanced._ |
+| `MINUTES_KEEP_AUDIO_DAYS` | `0` | Keep the audio for (days). 0 deletes the recording the moment it has been transcribed, which is the right answer for almost everyone: the transcript is the useful artefact and the audio is the sensitive one. (min 0, max 365) |
+| `MINUTES_KEEP_DAYS` | `30` | Keep transcripts and summaries for (days). Older meetings are deleted from the Pi. Anything emailed out has already left and is not affected. (min 1, max 3650) |
+| `MINUTES_STT_ENGINE` | `auto` | Speech-to-text engine. “auto” uses whichever of these is actually installed, best first. “none” records the audio and identifies who spoke, but writes no words — useful on hardware too slow to transcribe. See docs/meeting-minutes.md for how to install one. One of: auto, whisper-cpp, faster-whisper, vosk, none. |
+| `MINUTES_STT_MODEL` | empty | Speech-to-text model. Path to a whisper.cpp model file or a vosk model directory. Leave empty to use whatever was found in var/minutes/models. _Advanced._ |
+| `MINUTES_STT_LANGUAGE` | `en` | Spoken language. Two-letter language code passed to the engine. “auto” lets whisper detect it, at some cost in speed and accuracy. _Advanced._ |
+| `MINUTES_IDENTIFY_REMOTE` | `true` | Name remote speakers from the meeting window. Reads the participant list and the active-speaker highlight out of the Teams, Meet or Zoom page. This is by far the most reliable way to know who said something on a call, because the meeting app already knows. |
+| `MINUTES_READ_CAPTIONS` | `true` | Use the meeting's own live captions. When somebody has live captions switched on, Teams and Google Meet already write down what each remote person said and put their name on it. Reading that is far more accurate than transcribing the call audio here, and costs the Raspberry Pi nothing. |
+| `MINUTES_TURN_ON_CAPTIONS` | `false` | Switch live captions on when joining. Off by default on purpose: captions appear on the TV for everyone in the room, so switching them on is a visible change to the meeting and should be somebody's decision rather than a side effect. |
+| `MINUTES_IDENTIFY_FACES` | `false` | Recognise faces in the room (experimental). Looks at the room through the conference-bar camera between meetings and notes which enrolled colleagues are present. It cannot look during a meeting — the camera belongs to the meeting then — so the roster is whoever was seen just before the meeting started. |
+| `MINUTES_IDENTIFY_VOICES` | `false` | Recognise voices in the room (experimental). Matches each in-room speaking turn against enrolled voice profiles. Genuinely hard on a far-field microphone: expect it to be useful as a suggestion you correct, not as an answer you trust. |
+| `MINUTES_FACE_THRESHOLD` | `0.4` | Face match threshold. How similar a face must be to count as a match. Higher is stricter: raise it if the room starts calling people by the wrong name. (min 0.05, max 0.95) _Advanced._ |
+| `MINUTES_VOICE_THRESHOLD` | `0.62` | Voice match threshold. How similar a voice must be to count as a match. Higher is stricter. (min 0.05, max 0.99) _Advanced._ |
+| `MINUTES_ROOM_SCAN_SECONDS` | `90` | Look at the room every (seconds). How often to check who is in the room while no meeting is running. More often means a fresher roster and more work for the Pi. (min 15, max 3600) _Advanced._ |
+| `MINUTES_SUMMARY_ENABLED` | `false` | Write a summary with Claude. Sends the transcript to the Claude API and gets back a summary with decisions and action points. The transcript leaves the appliance when this is on — that is the whole point of it, and worth being deliberate about. |
+| `MINUTES_CLAUDE_API_KEY` | empty | Claude API key. From console.anthropic.com. Stored on the Pi in config.yaml, readable only by the appliance's own user, and never shown again here. **Secret — never logged.** |
+| `MINUTES_CLAUDE_MODEL` | `claude-opus-5` | Claude model. Opus writes the best summaries. Sonnet is cheaper and very close. Haiku is cheapest and noticeably blunter. One of: claude-opus-5, claude-sonnet-5, claude-haiku-4-5. |
+| `MINUTES_SUMMARY_EFFORT` | `medium` | How hard Claude should think. A summary is not a hard problem, so “medium” is the sensible setting. “high” costs more for little gain on a normal meeting. One of: low, medium, high. _Advanced._ |
+| `MINUTES_SUMMARY_INSTRUCTIONS` | empty | Extra instructions for the summary. Added to the prompt. Use it for house style: which sections you want, how long, whether to always list owners and dates. |
+| `MINUTES_SUMMARY_CONTEXT_MEETINGS` | `3` | Include this many earlier summaries. Summaries of previous meetings with the same title are put in front of the transcript, so a recurring meeting is written up knowing what was agreed last time. 0 turns that off. (min 0, max 10) _Advanced._ |
+| `MINUTES_EMAIL_ENABLED` | `false` | Email the summary. Sends the finished summary to the people who were in the meeting. |
+| `MINUTES_SMTP_HOST` | empty | SMTP server. Your mail provider's outgoing server. |
+| `MINUTES_SMTP_PORT` | `587` | SMTP port. 587 for STARTTLS, 465 for implicit TLS. (min 1, max 65535) |
+| `MINUTES_SMTP_SECURITY` | `starttls` | SMTP security. “starttls” with port 587 is what almost every provider wants. “none” sends your password in the clear and is only ever right for a relay on your own network. One of: starttls, ssl, none. |
+| `MINUTES_SMTP_USERNAME` | empty | SMTP username. Usually the full email address of the account sending the summary. |
+| `MINUTES_SMTP_PASSWORD` | empty | SMTP password. With Gmail or Microsoft 365 this must be an app password, not the account password. **Secret — never logged.** |
+| `MINUTES_EMAIL_FROM` | empty | Send from. The address the summary appears to come from. Leave empty to use the SMTP username. |
+| `MINUTES_EMAIL_TO_ATTENDEES` | `true` | Send to the people who were invited. Uses the attendee list from the calendar invitation, plus anyone the appliance recognised in the room. Off means only the fixed list below. |
+| `MINUTES_EMAIL_ALWAYS_TO` | empty | Always also send to. One address per line. A good place for the person who owns this appliance, so you can see what is going out. |
+| `MINUTES_EMAIL_ATTACH_TRANSCRIPT` | `false` | Attach the full transcript. Adds the whole transcript as a text file. Off sends the summary only, which is what most people want in their inbox. |
 
 ## System & access
 

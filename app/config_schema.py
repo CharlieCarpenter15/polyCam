@@ -50,6 +50,10 @@ class Field:
     validator: Callable[[Any], str | None] | None = None
     #: Placeholder shown in the Settings UI when empty.
     placeholder: str = ""
+    #: ``inputmode`` for the text box, which is what decides the on-screen
+    #: keyboard a phone offers. Only worth setting where the default keyboard
+    #: is wrong — a PIN wants digits, an API key very much does not.
+    inputmode: str = ""
 
     def __post_init__(self) -> None:  # pragma: no cover - developer guard
         if self.type not in TYPES:
@@ -103,6 +107,38 @@ def _validate_pin(value: Any) -> str | None:
     return None
 
 
+def _validate_email_or_empty(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.count("@") != 1 or text.startswith("@") or text.endswith("@") or " " in text:
+        return "Must be a single email address, e.g. room@example.com."
+    return None
+
+
+def _validate_email_list(value: Any) -> str | None:
+    items = value if isinstance(value, (list, tuple)) else str(value or "").splitlines()
+    bad = [
+        str(item).strip()
+        for item in items
+        if str(item).strip() and _validate_email_or_empty(item) is not None
+    ]
+    if bad:
+        return f"Not an email address: {', '.join(bad[:3])}"
+    return None
+
+
+def _validate_api_key_or_empty(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if " " in text or "\n" in text:
+        return "An API key has no spaces in it — check for a stray copy/paste."
+    if len(text) < 20:
+        return "That looks too short to be an API key."
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Groups (order = order of sections in the Settings UI)
 # ---------------------------------------------------------------------------
@@ -118,6 +154,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("display", "Display & browser"),
     ("background", "Background & slideshow"),
     ("recovery", "Reliability & recovery"),
+    ("minutes", "Meeting minutes (experimental)"),
     ("system", "System & access"),
 )
 
@@ -138,6 +175,11 @@ GROUP_HELP: dict[str, str] = {
     "and videos from the control panel and they rotate as a slideshow; a video "
     "plays all the way through before the next slide.",
     "recovery": "Self-healing. Leave these alone unless you have a reason.",
+    "minutes": "Records each meeting, writes down who said what, and can email a "
+    "summary to everyone who was there. Off by default, and every part of it is a "
+    "separate switch. Recording people has legal and social consequences — tell the "
+    "room, leave the on-screen notice on, and read docs/meeting-minutes.md before "
+    "turning any of this on in a room real meetings happen in.",
     "system": "Ports, logging and administrative access.",
 }
 
@@ -1003,6 +1045,7 @@ FIELDS: tuple[Field, ...] = (
         default="",
         group="system",
         label="Admin PIN",
+        inputmode="numeric",
         help="Digits only. Required before network access to the Settings page "
         "can be switched on.",
         secret=True,
@@ -1045,6 +1088,379 @@ FIELDS: tuple[Field, ...] = (
         help="“text” is easy to read in journalctl; “json” suits log collectors.",
         advanced=True,
     ),
+    # -- Meeting minutes ----------------------------------------------------
+    Field(
+        key="MINUTES_ENABLED",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Record and write up meetings",
+        help="The master switch. With this off nothing below runs, nothing is "
+        "recorded, and the appliance behaves exactly as it did before.",
+    ),
+    Field(
+        key="MINUTES_SHOW_RECORDING_NOTICE",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Show “this meeting is being recorded” on the TV",
+        help="A badge on the room screen for as long as a recording is running. "
+        "Leave this on. People are entitled to know, and a room that tells them "
+        "is a room they keep trusting.",
+    ),
+    Field(
+        key="MINUTES_RECORD_ROOM",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Record the room microphone",
+        help="The people physically in the room, from the conference bar.",
+    ),
+    Field(
+        key="MINUTES_RECORD_FAR_END",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Record what the room hears",
+        help="Everyone dialled in, taken from the speaker's own output. Recorded "
+        "as a second, separate track — which is what lets the transcript say "
+        "for certain whether a voice was in the room or on the call.",
+    ),
+    Field(
+        key="MINUTES_MIN_MEETING_SECONDS",
+        type="int",
+        default=120,
+        minimum=0,
+        maximum=3600,
+        group="minutes",
+        label="Ignore meetings shorter than (seconds)",
+        help="A meeting joined and left again in half a minute is a misfire, not "
+        "a meeting. Below this it is deleted rather than written up.",
+    ),
+    Field(
+        key="MINUTES_MAX_MEETING_MINUTES",
+        type="int",
+        default=240,
+        minimum=5,
+        maximum=1440,
+        group="minutes",
+        label="Stop recording after (minutes)",
+        help="A guard against a meeting nobody ever left filling the SD card.",
+        advanced=True,
+    ),
+    Field(
+        key="MINUTES_KEEP_AUDIO_DAYS",
+        type="int",
+        default=0,
+        minimum=0,
+        maximum=365,
+        group="minutes",
+        label="Keep the audio for (days)",
+        help="0 deletes the recording the moment it has been transcribed, which "
+        "is the right answer for almost everyone: the transcript is the useful "
+        "artefact and the audio is the sensitive one.",
+    ),
+    Field(
+        key="MINUTES_KEEP_DAYS",
+        type="int",
+        default=30,
+        minimum=1,
+        maximum=3650,
+        group="minutes",
+        label="Keep transcripts and summaries for (days)",
+        help="Older meetings are deleted from the Pi. Anything emailed out has "
+        "already left and is not affected.",
+    ),
+    # -- Speech to text -----------------------------------------------------
+    Field(
+        key="MINUTES_STT_ENGINE",
+        type="choice",
+        default="auto",
+        choices=("auto", "whisper-cpp", "faster-whisper", "vosk", "none"),
+        group="minutes",
+        label="Speech-to-text engine",
+        help="“auto” uses whichever of these is actually installed, best first. "
+        "“none” records the audio and identifies who spoke, but writes no words — "
+        "useful on hardware too slow to transcribe. See docs/meeting-minutes.md "
+        "for how to install one.",
+    ),
+    Field(
+        key="MINUTES_STT_MODEL",
+        type="str",
+        default="",
+        group="minutes",
+        label="Speech-to-text model",
+        help="Path to a whisper.cpp model file or a vosk model directory. Leave "
+        "empty to use whatever was found in var/minutes/models.",
+        placeholder="/opt/whisper/ggml-base.en.bin",
+        advanced=True,
+    ),
+    Field(
+        key="MINUTES_STT_LANGUAGE",
+        type="str",
+        default="en",
+        group="minutes",
+        label="Spoken language",
+        help="Two-letter language code passed to the engine. “auto” lets whisper "
+        "detect it, at some cost in speed and accuracy.",
+        placeholder="en",
+        advanced=True,
+    ),
+    # -- Who was speaking ---------------------------------------------------
+    Field(
+        key="MINUTES_IDENTIFY_REMOTE",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Name remote speakers from the meeting window",
+        help="Reads the participant list and the active-speaker highlight out of "
+        "the Teams, Meet or Zoom page. This is by far the most reliable way to "
+        "know who said something on a call, because the meeting app already knows.",
+    ),
+    Field(
+        key="MINUTES_READ_CAPTIONS",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Use the meeting's own live captions",
+        help="When somebody has live captions switched on, Teams and Google Meet "
+        "already write down what each remote person said and put their name on "
+        "it. Reading that is far more accurate than transcribing the call audio "
+        "here, and costs the Raspberry Pi nothing.",
+    ),
+    Field(
+        key="MINUTES_TURN_ON_CAPTIONS",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Switch live captions on when joining",
+        help="Off by default on purpose: captions appear on the TV for everyone "
+        "in the room, so switching them on is a visible change to the meeting "
+        "and should be somebody's decision rather than a side effect.",
+    ),
+    Field(
+        key="MINUTES_IDENTIFY_FACES",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Recognise faces in the room (experimental)",
+        help="Looks at the room through the conference-bar camera between "
+        "meetings and notes which enrolled colleagues are present. It cannot look "
+        "during a meeting — the camera belongs to the meeting then — so the "
+        "roster is whoever was seen just before the meeting started.",
+    ),
+    Field(
+        key="MINUTES_IDENTIFY_VOICES",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Recognise voices in the room (experimental)",
+        help="Matches each in-room speaking turn against enrolled voice profiles. "
+        "Genuinely hard on a far-field microphone: expect it to be useful as a "
+        "suggestion you correct, not as an answer you trust.",
+    ),
+    Field(
+        key="MINUTES_FACE_THRESHOLD",
+        type="float",
+        default=0.40,
+        minimum=0.05,
+        maximum=0.95,
+        group="minutes",
+        label="Face match threshold",
+        help="How similar a face must be to count as a match. Higher is stricter: "
+        "raise it if the room starts calling people by the wrong name.",
+        advanced=True,
+    ),
+    Field(
+        key="MINUTES_VOICE_THRESHOLD",
+        type="float",
+        default=0.62,
+        minimum=0.05,
+        maximum=0.99,
+        group="minutes",
+        label="Voice match threshold",
+        help="How similar a voice must be to count as a match. Higher is stricter.",
+        advanced=True,
+    ),
+    Field(
+        key="MINUTES_ROOM_SCAN_SECONDS",
+        type="int",
+        default=90,
+        minimum=15,
+        maximum=3600,
+        group="minutes",
+        label="Look at the room every (seconds)",
+        help="How often to check who is in the room while no meeting is running. "
+        "More often means a fresher roster and more work for the Pi.",
+        advanced=True,
+    ),
+    # -- The summary --------------------------------------------------------
+    Field(
+        key="MINUTES_SUMMARY_ENABLED",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Write a summary with Claude",
+        help="Sends the transcript to the Claude API and gets back a summary with "
+        "decisions and action points. The transcript leaves the appliance when "
+        "this is on — that is the whole point of it, and worth being deliberate "
+        "about.",
+    ),
+    Field(
+        key="MINUTES_CLAUDE_API_KEY",
+        type="password",
+        default="",
+        group="minutes",
+        label="Claude API key",
+        secret=True,
+        help="From console.anthropic.com. Stored on the Pi in config.yaml, "
+        "readable only by the appliance's own user, and never shown again here.",
+        placeholder="sk-ant-…",
+        validator=_validate_api_key_or_empty,
+    ),
+    Field(
+        key="MINUTES_CLAUDE_MODEL",
+        type="choice",
+        default="claude-opus-5",
+        choices=("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"),
+        group="minutes",
+        label="Claude model",
+        help="Opus writes the best summaries. Sonnet is cheaper and very close. "
+        "Haiku is cheapest and noticeably blunter.",
+    ),
+    Field(
+        key="MINUTES_SUMMARY_EFFORT",
+        type="choice",
+        default="medium",
+        choices=("low", "medium", "high"),
+        group="minutes",
+        label="How hard Claude should think",
+        help="A summary is not a hard problem, so “medium” is the sensible "
+        "setting. “high” costs more for little gain on a normal meeting.",
+        advanced=True,
+    ),
+    Field(
+        key="MINUTES_SUMMARY_INSTRUCTIONS",
+        type="text",
+        default="",
+        group="minutes",
+        label="Extra instructions for the summary",
+        help="Added to the prompt. Use it for house style: which sections you "
+        "want, how long, whether to always list owners and dates.",
+        placeholder="Always end with a table of action points, owner and due date.",
+    ),
+    Field(
+        key="MINUTES_SUMMARY_CONTEXT_MEETINGS",
+        type="int",
+        default=3,
+        minimum=0,
+        maximum=10,
+        group="minutes",
+        label="Include this many earlier summaries",
+        help="Summaries of previous meetings with the same title are put in front "
+        "of the transcript, so a recurring meeting is written up knowing what was "
+        "agreed last time. 0 turns that off.",
+        advanced=True,
+    ),
+    # -- Sending it out -----------------------------------------------------
+    Field(
+        key="MINUTES_EMAIL_ENABLED",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Email the summary",
+        help="Sends the finished summary to the people who were in the meeting.",
+    ),
+    Field(
+        key="MINUTES_SMTP_HOST",
+        type="str",
+        default="",
+        group="minutes",
+        label="SMTP server",
+        help="Your mail provider's outgoing server.",
+        placeholder="smtp.gmail.com",
+    ),
+    Field(
+        key="MINUTES_SMTP_PORT",
+        type="int",
+        default=587,
+        minimum=1,
+        maximum=65535,
+        group="minutes",
+        label="SMTP port",
+        help="587 for STARTTLS, 465 for implicit TLS.",
+    ),
+    Field(
+        key="MINUTES_SMTP_SECURITY",
+        type="choice",
+        default="starttls",
+        choices=("starttls", "ssl", "none"),
+        group="minutes",
+        label="SMTP security",
+        help="“starttls” with port 587 is what almost every provider wants. "
+        "“none” sends your password in the clear and is only ever right for a "
+        "relay on your own network.",
+    ),
+    Field(
+        key="MINUTES_SMTP_USERNAME",
+        type="str",
+        default="",
+        group="minutes",
+        label="SMTP username",
+        help="Usually the full email address of the account sending the summary.",
+        placeholder="room@example.com",
+    ),
+    Field(
+        key="MINUTES_SMTP_PASSWORD",
+        type="password",
+        default="",
+        group="minutes",
+        label="SMTP password",
+        secret=True,
+        help="With Gmail or Microsoft 365 this must be an app password, not the "
+        "account password.",
+    ),
+    Field(
+        key="MINUTES_EMAIL_FROM",
+        type="str",
+        default="",
+        group="minutes",
+        label="Send from",
+        help="The address the summary appears to come from. Leave empty to use "
+        "the SMTP username.",
+        placeholder="room@example.com",
+        validator=_validate_email_or_empty,
+    ),
+    Field(
+        key="MINUTES_EMAIL_TO_ATTENDEES",
+        type="bool",
+        default=True,
+        group="minutes",
+        label="Send to the people who were invited",
+        help="Uses the attendee list from the calendar invitation, plus anyone "
+        "the appliance recognised in the room. Off means only the fixed list below.",
+    ),
+    Field(
+        key="MINUTES_EMAIL_ALWAYS_TO",
+        type="list",
+        default=[],
+        group="minutes",
+        label="Always also send to",
+        help="One address per line. A good place for the person who owns this "
+        "appliance, so you can see what is going out.",
+        placeholder="charlie@example.com",
+        validator=_validate_email_list,
+    ),
+    Field(
+        key="MINUTES_EMAIL_ATTACH_TRANSCRIPT",
+        type="bool",
+        default=False,
+        group="minutes",
+        label="Attach the full transcript",
+        help="Adds the whole transcript as a text file. Off sends the summary "
+        "only, which is what most people want in their inbox.",
+    ),
+    # -- System -------------------------------------------------------------
     Field(
         key="DEV_MODE",
         type="bool",

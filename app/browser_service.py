@@ -604,6 +604,31 @@ class BrowserService:
         except (CDPError, TypeError, ValueError):
             return False
 
+    def read_meeting_page(self, script: str, *, timeout: float = 6.0) -> Any:
+        """Run a read-only script in the meeting page and return its JSON result.
+
+        The one door this service opens onto the meeting page for anything other
+        than joining it, added for the meeting-minutes feature so it can read the
+        participant list and captions that Teams, Meet and Zoom already draw on
+        screen. It is deliberately narrow and deliberately timid: it refuses
+        unless a meeting is actually on screen, it presses nothing and navigates
+        nowhere, and it returns ``None`` instead of raising. Something polling a
+        live meeting every couple of seconds must not be able to disturb it, and
+        the only way to guarantee that is for the failure path to be "no answer".
+        """
+        if self.target != TARGET_MEETING:
+            return None
+        try:
+            raw = self._cdp.evaluate(script, timeout=timeout)
+        except (CDPError, OSError, ValueError):
+            return None
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except ValueError:
+                return None
+        return raw
+
     def toggle_meeting_mute(self) -> bool:
         """Press the meeting page's own mute control, where there is one."""
         texts = ["Mute microphone", "Unmute microphone", "Mute", "Unmute"]

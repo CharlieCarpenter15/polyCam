@@ -40,7 +40,8 @@
       {% elif f.type == 'password' %}
         <input type="password" id="f-{{ f.key }}" data-setting="{{ f.key }}"
                value="{{ value }}" placeholder="{{ f.placeholder }}"
-               autocomplete="new-password" inputmode="numeric"
+               autocomplete="new-password"
+               {% if f.inputmode %}inputmode="{{ f.inputmode }}"{% endif %}
                {% if locked %}disabled{% endif %}>
       {% else %}
         <input type="text" id="f-{{ f.key }}" data-setting="{{ f.key }}"
