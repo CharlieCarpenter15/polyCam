@@ -480,8 +480,15 @@ captions name the remote speakers, and enrolled faces and voices name the people
 in the room. Where nothing knows, the line stays unattributed rather than being
 given to somebody — a confidently wrong name is far worse than a blank one.
 
-Turning it on, enrolling colleagues, the optional pieces you need to install, and
-an honest account of what works well and what does not, are all in
+Turning it on is a switch in Settings and one command for the parts that need
+downloading:
+
+```bash
+./scripts/install-minutes.sh          # or ./scripts/install.sh --with-minutes
+```
+
+Enrolling colleagues, what each part needs, and an honest account of what works
+well and what does not, are all in
 **[docs/meeting-minutes.md](docs/meeting-minutes.md)**. Read it first: recording
 a room full of people is a legal and social decision as much as a technical one,
 and some of the recognition is genuinely experimental.
@@ -1396,6 +1403,14 @@ A test fails if you forget.
 ./scripts/roomctl calendar <ics-url>  set it and test it immediately
 ./scripts/roomctl pin <digits>
 ./scripts/roomctl lan-admin on|off
+
+./scripts/roomctl minutes             meeting minutes: what is it doing?
+./scripts/roomctl minutes list [n]    the last n meetings recorded
+./scripts/roomctl minutes show [id]   one meeting (--transcript | --summary)
+./scripts/roomctl minutes process <id>  write that meeting up again
+./scripts/roomctl minutes delete <id>   remove one for good (--yes)
+./scripts/roomctl minutes sweep       apply the retention policy now
+./scripts/roomctl minutes people      who the room can recognise
 
 ./scripts/roomctl reset               defaults, keeping calendar and PIN
 ./scripts/roomctl reboot

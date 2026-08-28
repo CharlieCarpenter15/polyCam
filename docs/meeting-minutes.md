@@ -155,77 +155,90 @@ Two things that will not work, and are not bugs:
 Settings → **Meeting minutes**. Turn on **Record and write up meetings**. That
 alone gets you recordings and, once an engine is installed, transcripts.
 
-### 2. A speech-to-text engine
+### 2. The engines and the models
 
-Nothing is bundled — the engines are large and most rooms want a different one.
-`MINUTES_STT_ENGINE` is `auto`, which uses whichever it finds.
-
-**whisper.cpp — recommended.** One binary and one model file. Punctuation and
-capitals out of the box, which materially improves the summary.
+One command, on the Pi, as the appliance's user:
 
 ```bash
-# On the Pi, as the appliance's user
-mkdir -p ~/room-appliance/var/minutes/models
-cd ~/room-appliance/var/minutes/models
-# Fetch a model: base.en on a Pi 5, tiny.en on a Pi 4
-curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
-# and put the whisper.cpp `whisper-cli` binary somewhere on PATH
+./scripts/install-minutes.sh
 ```
 
-**faster-whisper** — `pip install faster-whisper` in the appliance's virtualenv.
-More accurate, 300–500 MB.
+It installs the pip extras from `requirements-minutes.txt` and downloads the
+four model files into `var/minutes/models` — YuNet and SFace for faces,
+TitaNet-small for voices, and a whisper.cpp ggml model for speech — then
+installs the whisper.cpp `whisper-cli` binary, from a prebuilt release where one
+exists for this architecture and otherwise by building it, which takes five to
+ten minutes on a Pi 5. `./scripts/install.sh --with-minutes` does the same as
+part of a first install, and there is a **Download the missing models** button
+on the `/minutes` page that runs it in the background.
 
-**vosk** — `pip install vosk` plus a model directory. Small and quick; no
-punctuation.
+Safe to run again at any time. Anything already downloaded and intact is
+checked and left alone, nothing is replaced without `--force`, and it refuses
+before downloading if the disk is too small. A failure in one part never loses
+the others: `anthropic` on its own is enough to make summaries work.
 
-The Settings page and `/minutes` both show which engines were found and, for
-each one that was not, exactly what is missing.
+**Which speech model you get depends on the hardware.** `base.en` on a Pi 5 or
+better, `tiny.en` on a Pi 4, and on the `low` profile — a Pi 3, or anything
+under 2 GB — no local speech engine is installed at all. An hour-long meeting
+would take most of a working day to transcribe on those cores, and the
+appliance refuses to run a local engine there in any case, so the download would
+sit unused. Recording, face and voice recognition and the Claude summary all
+still work. Override with `--whisper tiny.en|base.en|small.en`, or install part
+of it with `--models-only` / `--pip-only`; `--help` lists everything.
 
-### 3. Recognising people (optional)
+**What it checks.** Every download goes over HTTPS with certificate
+verification, lands under a temporary name in the destination directory, and is
+renamed into place only once it is the expected size, is not an HTML error page,
+and starts with the right magic bytes — so a half-finished file, or a captive
+portal's login page, is never left where a model should be. The SHA-256 of
+whatever arrived is recorded in `var/minutes/models/manifest.sha256`, so a later
+run can tell you a file has changed underneath the appliance and two appliances
+can be compared by diffing their manifests:
 
 ```bash
-pip install opencv-python-headless numpy
+cd var/minutes/models && sha256sum -c manifest.sha256
 ```
 
-Note `opencv-python-headless` and not the `contrib` build: the detector and
-recogniser used here are in OpenCV's core, and contrib is three times the size
-for nothing this needs.
+If `scripts/minutes-models.sha256` exists and names a file, that checksum is
+enforced instead — copy a manifest from an appliance you trust to create one.
+There is no such file in the repository on purpose: a checksum that turned out
+to be wrong would reject every genuine download, which is worse than having
+none.
 
-Then put the two model files in `var/minutes/models`: `face_detection_yunet`
-(about 230 KB) and `face_recognition_sface` (about 37 MB), both from the OpenCV
-Zoo at <https://github.com/opencv/opencv_zoo>. The appliance does not download
-them itself — a room appliance that reaches out to the internet on its own is a
-surprise — and the `/minutes` page names the exact files it is looking for and
-whether it found them.
+**The appliance still never fetches anything on its own.** Something in a
+meeting room that reaches out to the internet unprompted is a surprise, and
+several hundred megabytes over the office connection is a rude one. Pressed by
+somebody who can see what it is going to fetch, it is simply a request.
 
-For voices:
+### 3. What each part needs, if you would rather do it by hand
 
-```bash
-pip install sherpa-onnx numpy webrtcvad-wheels
-```
+| Part | Package | Model file |
+| --- | --- | --- |
+| Summaries | `anthropic` | — |
+| Speech to text | none (whisper.cpp is a binary) | `ggml-*.bin` |
+| | or `faster-whisper` — more accurate, 300–500 MB | its own |
+| | or `vosk` — small and quick, no punctuation | a model directory |
+| Faces | `opencv-python-headless`, `numpy` | `face_detection_yunet_*`, `face_recognition_sface_*` |
+| Voices | `sherpa-onnx`, `numpy`, `webrtcvad-wheels` | a `.onnx` with `titanet`, `speaker` or `ecapa` in the name |
 
-and put a speaker-embedding model — a `.onnx` file with `titanet`, `speaker` or
-`ecapa` in its name — in `var/minutes/models`. TitaNet-small is the one to use:
-about 40 MB, and in testing against twenty speakers in a simulated reverberant
-room it identified the right person 92% of the time, against 38–48% for the
-older alternatives. `sherpa-onnx` brings its own ONNX runtime, so that is the
-whole dependency — no PyTorch and no compiler.
+Model files go in `var/minutes/models`. The `/minutes` page names the exact
+files it is looking for and whether it found them.
 
-`webrtcvad-wheels` matters more than its size suggests. Without it the appliance
-finds speech by loudness alone, which misses between a third and two thirds of
-it in a real room — so a segment may be half of somebody else's sentence, and
-the appliance will refuse to put a name to any of them. It will still tell
-speakers apart. Note the `-wheels` suffix: plain `webrtcvad` has no ARM build
-and would have to be compiled on the Pi.
+Two notes worth having. It is `opencv-python-headless` and not the `contrib`
+build: the detector and recogniser used here are in OpenCV's core, and contrib
+is three times the size for nothing this needs. And `webrtcvad-wheels` matters
+more than its 90 KB suggests — without it the appliance finds speech by loudness
+alone, which misses between a third and two thirds of it in a real room, so a
+segment may be half of somebody else's sentence and the appliance will refuse to
+put a name to any of them. It will still tell speakers apart. Note the `-wheels`
+suffix: plain `webrtcvad` has no ARM build and would have to be compiled on the
+Pi.
 
 ### 4. The summary
 
-```bash
-pip install anthropic
-```
-
-Then in Settings: turn on **Write a summary with Claude**, paste an API key from
-`console.anthropic.com`, and pick a model. `claude-opus-5` writes the best
+The installer has already put `anthropic` in place. In Settings: turn on
+**Write a summary with Claude**, paste an API key from `console.anthropic.com`,
+and pick a model. `claude-opus-5` writes the best
 summaries; `claude-sonnet-5` is cheaper and very close.
 
 A typical hour-long meeting is roughly 10–15k tokens of transcript, so the cost
@@ -278,7 +291,7 @@ worse. A person adding a sample by hand is trusted and skips that check.
 var/minutes/
   people/people.json          profiles, including face and voice vectors
   people/photos/              reference photos
-  models/                     speech and face models you installed
+  models/                     speech, face and voice models (scripts/install-minutes.sh)
   sessions/<id>/
     meta.json                 the meeting, and how far it got
     room.wav, farend.wav      deleted once transcribed, by default
@@ -294,6 +307,33 @@ Everything is owner-readable only. Deleting `var/minutes` removes every trace of
 the feature.
 
 ---
+
+## From a terminal
+
+Everything on the `/minutes` page is also a `roomctl` subcommand, which is
+usually quicker over SSH and is the only route left when the dashboard itself is
+the thing misbehaving:
+
+```bash
+roomctl minutes                    # what the feature is doing right now
+roomctl minutes list 10            # the last ten meetings
+roomctl minutes show               # the most recent meeting, in full
+roomctl minutes show 20260828 --transcript   # a prefix is enough, like git
+roomctl minutes process <id>       # write that meeting up again
+roomctl minutes delete <id> --yes  # remove one for good
+roomctl minutes sweep              # apply the retention policy now
+roomctl minutes people             # who the room has been taught to recognise
+```
+
+`show --transcript` prints the transcript and nothing else, so it pipes:
+
+```bash
+roomctl minutes show --transcript | grep -i "action"
+```
+
+With the appliance stopped it still reads what is on disk and says that live
+status is unavailable. Nothing here ever prints an API key, an SMTP password or
+a face or voice fingerprint.
 
 ## When it does not work
 
