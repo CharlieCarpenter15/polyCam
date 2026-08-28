@@ -542,7 +542,28 @@ are still on screen. This is intended. The appliance keeps retrying with a
 backoff and clears the message when the feed returns. Check the ICS link has not
 expired — published Outlook links can be reset by an administrator.
 
-### Meetings appear but the JOIN button says "No meeting link"
+### Meetings appear but every JOIN button says "No meeting link"
+
+Check how many of your meetings actually carry a link the room can open:
+
+```bash
+./scripts/roomctl calendar "https://…/room.ics"
+```
+
+If it reports **0 of N**, the calendar is being read fine but the join links
+are not in the feed. On Microsoft 365 the usual cause is that the room mailbox
+strips the meeting body — which is exactly where the Teams link lives. Resource
+mailboxes do this by default. An Exchange admin can stop it:
+
+```powershell
+Set-CalendarProcessing -Identity "boardroom@yourcompany.com" `
+  -DeleteComments $false -DeleteSubject $false -AddOrganizerToSubject $false
+```
+
+That only affects meetings booked *after* the change, so test with a new
+booking rather than an existing one.
+
+### One meeting says "No meeting link"
 
 The event has no Teams / Meet / Zoom link the appliance recognises in its URL,
 location or description. **Checks → Meeting join automation** shows what was

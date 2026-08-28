@@ -321,12 +321,9 @@ cmd_calendar() {
   cmd_set CALENDAR_SOURCE ics >/dev/null
   cmd_set CALENDAR_ICS_URL "$1"
   dim "Fetching now…"
-  room_load_config || true
-  local port; port="$(room_config DASHBOARD_PORT 8080)"
-  room_post_internal /api/internal/token-check '{}' >/dev/null 2>&1 || true
   py - << 'PYEOF'
 import sys
-import time
+from collections import Counter
 
 sys.path.insert(0, ".")
 from app.calendar_service import CalendarService
@@ -335,11 +332,36 @@ from app.config import get_config
 service = CalendarService(get_config())
 service._refresh_once()  # noqa: SLF001 - a deliberate one-shot check
 status = service.status()
-if status["ok"]:
-    print(f"  ✓ {status['meeting_count']} meeting(s) found.")
-else:
-    print(f"  ✗ {status['error']}")
+
+if not status["ok"]:
+    print(f"  \033[31m\u2717\033[0m {status['error']}")
     sys.exit(1)
+
+meetings = service.meetings()
+print(f"  \033[32m\u2713\033[0m calendar read: {len(meetings)} meeting(s) in the look-ahead window")
+
+if not meetings:
+    print("    Nothing scheduled — that may well be correct.")
+    sys.exit(0)
+
+joinable = [m for m in meetings if m.has_link]
+mark = "\033[32m\u2713\033[0m" if joinable else "\033[33m!\033[0m"
+print(f"  {mark} {len(joinable)} of {len(meetings)} have a join link the room can open")
+for provider, count in Counter(m.provider_id for m in joinable).most_common():
+    print(f"      {count} x {provider}")
+
+if not joinable:
+    print()
+    print("    No join links found in any meeting. The usual cause is an Exchange")
+    print("    room mailbox stripping the meeting body, which is where the Teams")
+    print("    link lives. An Exchange admin can stop that:")
+    print()
+    print("      Set-CalendarProcessing -Identity <room-mailbox> \\")
+    print("        -DeleteComments $false -DeleteSubject $false \\")
+    print("        -AddOrganizerToSubject $false")
+    print()
+    print("    Until then the dashboard lists the meetings, but JOIN will say")
+    print("    \"No meeting link\" because there is nothing to open.")
 PYEOF
 }
 
