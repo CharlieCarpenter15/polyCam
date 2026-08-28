@@ -557,6 +557,27 @@ returns the real value. To set a new one:
 ./scripts/roomctl pin 246813
 ```
 
+### The TV shows a browser "Sign in" box wanting a username and password
+
+That is Chromium's own HTTP Basic Authentication dialog, showing
+`http://127.0.0.1:8080`. **This appliance never asks for a username** — its own
+sign-in is a numeric PIN on a page it draws itself. A browser only shows that
+dialog when a server answers `401` with a `WWW-Authenticate: Basic` header, so
+something *else* is listening on the dashboard port.
+
+```bash
+./scripts/roomctl screen
+```
+
+It will report **"wrong program on port 8080"** and name the process. Then
+either stop that program, or move the room out of its way:
+
+```bash
+sudo ss -tlnp | grep :8080                  # what owns the port
+./scripts/roomctl set DASHBOARD_PORT 8090
+./scripts/roomctl restart all
+```
+
 ### "backend NOT answering on port 8080"
 
 ```bash

@@ -194,8 +194,40 @@ cmd_screen() {
   printf '  render mode : %s\n' "$mode"
   printf '  session     : %s\n' "$session"
 
-  if curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:${dash_port}/"; then
-    printf '  backend     : \033[32manswering\033[0m on port %s\n' "$dash_port"
+  # Probe /api/health and look at the CODE and the BODY, not just success.
+  # `curl --fail` treats any error status as "nothing there", so a different
+  # program answering 401 on this port looked identical to the room software
+  # being down — while actually being a completely different problem.
+  local probe_body probe_code
+  probe_body="$(mktemp)"
+  probe_code="$(curl -s --max-time 5 -o "$probe_body" -w '%{http_code}' \
+                "http://127.0.0.1:${dash_port}/api/health" 2>/dev/null || echo 000)"
+
+  if grep -q '"components"' "$probe_body" 2>/dev/null; then
+    printf '  backend     : \033[32manswering\033[0m on port %s (HTTP %s)\n' \
+      "$dash_port" "$probe_code"
+    rm -f "$probe_body"
+  elif [ "$probe_code" != "000" ]; then
+    # Something is there, but it is not us.
+    printf '  backend     : \033[31mwrong program\033[0m on port %s (HTTP %s)\n\n' \
+      "$dash_port" "$probe_code"
+    bold "Another program is answering on port ${dash_port}."
+    if [ "$probe_code" = "401" ] || [ "$probe_code" = "403" ]; then
+      dim "It returned HTTP ${probe_code}, which is why the TV shows a browser"
+      dim "\"Sign in\" box asking for a username and password. That dialog is"
+      dim "Chromium reacting to that program — it is not this appliance, which"
+      dim "never asks for a username."
+      printf '\n'
+    fi
+    local owner
+    owner="$(port_listener "$dash_port" || true)"
+    [ -n "$owner" ] && printf '    %s\n\n' "$(printf '%s' "$owner" | tr -s ' ' | head -3)"
+    dim "Find it, then either stop it or move the room to a free port:"
+    printf '\n'
+    dim "  sudo ss -tlnp | grep :${dash_port}"
+    dim "  roomctl set DASHBOARD_PORT 8090 && roomctl restart all"
+    rm -f "$probe_body"
+    return 1
   else
     printf '  backend     : \033[31mNOT answering\033[0m on port %s\n' "$dash_port"
     printf '\n'
@@ -226,6 +258,7 @@ cmd_screen() {
       dim "  roomctl logs backend"
       dim "  roomctl restart backend"
     fi
+    rm -f "$probe_body"
     return 1
   fi
 
