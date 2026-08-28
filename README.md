@@ -63,17 +63,44 @@ network. No keyboard, no YAML, no SSH.
 
 | | |
 | --- | --- |
-| Raspberry Pi 5 | 4 GB is plenty. A Pi 4 works but handles AirPlay less well. |
+| Raspberry Pi 5 | 4 GB or 8 GB. Read the note below — the choice matters more than it looks. |
 | Raspberry Pi OS (64-bit) | The **Desktop** image, not Lite — a graphical session is required. |
 | TV | Connected over HDMI. |
 | Poly USB conference bar | Or any USB conference device; nothing is hard-coded to a model. |
 | Network | Ethernet preferred, Wi-Fi supported. |
 | Keyboard & mouse | For the install only. Unplug them afterwards. |
 
+### Which Pi, honestly
+
+The two halves of this appliance have very different appetites:
+
+| | Dashboard, calendar, AirPlay, one-touch join | Being the video endpoint in a call |
+| --- | --- | --- |
+| **Pi 5 (4/8 GB)** | Comfortable | Works |
+| **Pi 4 (4/8 GB)** | Comfortable | Usable, runs warm |
+| **Pi 3 (1 GB)** | Fine | **Not realistically** |
+
+A Pi 3 has 1 GB of RAM and no hardware video encode. Chromium plus a live
+Google Meet or Teams call needs more memory than that, and the outgoing camera
+stream has to be encoded in software on a 1.2 GHz A53. It will swap, and the
+call will be poor no matter how the software is tuned.
+
+If a Pi 3 is what you have, it still makes a good **room dashboard and
+launcher** — calendar on the TV, AirPlay sharing, and a JOIN button people
+press before taking audio on their own laptop. Retune it with:
+
+```bash
+./scripts/roomctl slow-device on
+```
+
+That gives the meeting page far longer to load before the automation touches
+it, widens the join window to five minutes, and stops the dashboard doing
+avoidable work. It improves *joining*. It cannot make the call itself smooth.
+
 **Install**
 
 ```bash
-git clone https://github.com/CharlieCarpenter15/polyCam.git room-appliance
+git clone -b main https://github.com/CharlieCarpenter15/polyCam.git room-appliance
 cd room-appliance
 ./install.sh
 ```
@@ -570,6 +597,39 @@ location or description. **Checks → Meeting join automation** shows what was
 found. Organisers sometimes paste a link as an image or an attachment, which
 cannot be detected.
 
+### Joining is unreliable and the Pi is a 3 or older
+
+Almost certainly timing. The defaults assume a Pi 5: the automation waits 6–8
+seconds for the page, starts pressing buttons, and gives up after 90 seconds.
+On a Pi 3 the Meet pre-join screen can take 30–60 seconds to appear, so it
+presses at nothing and then runs out of budget.
+
+```bash
+./scripts/roomctl slow-device on
+```
+
+Then watch a real join happen:
+
+```bash
+./scripts/roomctl logs -f
+```
+
+`meeting.join_automation_failed` with `clicks=none` means it never found a
+button at all — push the wait up further:
+
+```bash
+./scripts/roomctl set JOIN_SETTLE_SECONDS 45
+```
+
+Also check memory, because on a Pi 3 that is the real ceiling:
+
+```bash
+./scripts/roomctl status | grep -i memory
+```
+
+Below roughly 150 MB free, Chromium is swapping and no amount of tuning helps.
+See [Which Pi, honestly](#which-pi-honestly).
+
 ### A meeting opens but the room never gets in
 
 Expected some of the time — see
@@ -1028,6 +1088,7 @@ A test fails if you forget.
 ```bash
 ./scripts/roomctl status              how is the room?
 ./scripts/roomctl screen              why is the TV blank / white / wrong?
+./scripts/roomctl slow-device on      retune for a Pi 3 / older hardware
 ./scripts/roomctl doctor              full hardware check
 ./scripts/roomctl panel               the control-panel address and PIN status
 
