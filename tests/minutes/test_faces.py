@@ -200,23 +200,25 @@ class FakeNumpy:
 
 
 @pytest.fixture()
-def minutes_home(tmp_path, monkeypatch):
-    """Point the package's directories at a throw-away tree."""
+def minutes_home(room_dirs):
+    """Point the package's directories at a throw-away tree.
+
+    Through ``room_dirs``, which sets ``ROOM_APPLIANCE_VAR`` and reloads
+    ``app.paths`` — the appliance's own supported way of moving the writable
+    tree. The names in ``app/minutes/paths.py`` are derived from that on every
+    lookup rather than stored, so patching them individually would move nothing
+    and would leave a stale module global behind for every later test.
+    """
     from app.minutes import paths as minutes_paths
 
-    root = tmp_path / "minutes"
-    places = {
-        "MINUTES_DIR": root,
-        "SESSIONS_DIR": root / "sessions",
-        "PEOPLE_DIR": root / "people",
-        "PEOPLE_FILE": root / "people" / "people.json",
-        "PHOTOS_DIR": root / "people" / "photos",
-        "MODELS_DIR": root / "models",
-    }
-    for name, path in places.items():
-        monkeypatch.setattr(minutes_paths, name, path)
     minutes_paths.ensure_dirs()
-    return places
+    return {
+        name: getattr(minutes_paths, name)
+        for name in (
+            "MINUTES_DIR", "SESSIONS_DIR", "PEOPLE_DIR",
+            "PEOPLE_FILE", "PHOTOS_DIR", "MODELS_DIR",
+        )
+    }
 
 
 @pytest.fixture()

@@ -3,10 +3,14 @@
 {% block content %}
   <section class="block">
     <div class="block-body">
-      <h1 style="margin:0 0 8px;font-size:22px">The control panel is switched off</h1>
+      {# Defaults describe the control panel, which is what this page said when
+         it only had one caller. Anything else passes its own two lines. #}
+      <h1 style="margin:0 0 8px;font-size:22px">
+        {{ disabled_what | default("The control panel") }} is switched off
+      </h1>
       <p class="field-help">
-        Turn it back on in Settings &rarr; System &amp; access &rarr;
-        <em>Enable the phone control panel</em>.
+        Turn it back on in Settings &rarr;
+        {{ disabled_where | default("System &amp; access &rarr; <em>Enable the phone control panel</em>") | safe }}.
       </p>
       <a class="btn btn-primary" href="{{ url_for('settings_page') }}"
          style="margin-top:14px">Open Settings</a>

@@ -1496,8 +1496,6 @@ class RosterSampler:
                 provider=provider or "unknown",
                 state=str(payload.get("state") or "installed"),
             )
-            if flush:
-                return "ok"
 
         payload = self._read(build_drain_script(run, flush=flush))
         if payload is None:
@@ -1711,24 +1709,40 @@ def _settle(lines: list[CaptionLine]) -> list[CaptionLine]:
     wins.
     """
     out: list[CaptionLine] = []
+    seen_at = 0.0
     for line in lines:
         text = re.sub(r"\s+", " ", str(line.text or "")).strip()
         if not text:
             continue
         speaker = _name(line.speaker)
-        if out and out[-1].speaker == speaker and _extends(out[-1].text, text):
+        at = _float(line.at)
+        # Close together in time as well as in wording: a draft is rewritten
+        # within a second or two, so two lines a minute apart where one happens
+        # to begin with the other are two different things somebody said.
+        near = out and (at - seen_at) <= CAPTION_MERGE_GAP_SECONDS
+        if near and out[-1].speaker == speaker and _extends(out[-1].text, text):
             if len(text) > len(out[-1].text):
                 out[-1].text = text
+            seen_at = at
             continue
-        out.append(CaptionLine(at=_float(line.at), speaker=speaker, text=text))
+        out.append(CaptionLine(at=at, speaker=speaker, text=text))
+        seen_at = at
     return out
 
 
 def _extends(before: str, after: str) -> bool:
+    """Is one of these the same sentence as the other, a few words further on?
+
+    A plain prefix test, with no minimum length: a first draft is very often
+    one or two characters ("so", "I"), and a length floor here would leave
+    exactly the half-sentences this is meant to remove. It is safe because the
+    caller has already established that the two lines are from the same speaker
+    and moments apart.
+    """
     a, b = before.casefold(), after.casefold()
     if a == b:
         return True
-    if len(a) < 3 or len(b) < 3:
+    if not a or not b:
         return False
     return b.startswith(a) or a.startswith(b)
 

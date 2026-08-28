@@ -125,6 +125,13 @@ class MinutesService:
         #: What the worker is doing right now, for the web page.
         self._working_on: str = ""
         self._last_error: str = ""
+        #: Whether the appliance has asked for this to be running. Switching
+        #: ``MINUTES_ENABLED`` on must not start threads inside a process that
+        #: never started its services — ``create_app(start_services=False)``
+        #: builds the whole appliance without running any of it, and a feature
+        #: that started itself anyway would leave a recorder and a worker alive
+        #: in something that was only ever meant to answer one request.
+        self._appliance_started = False
 
         config.on_change(self._on_config_change)
 
@@ -135,6 +142,7 @@ class MinutesService:
 
     def start(self) -> None:
         """Begin watching the room, if the feature is on."""
+        self._appliance_started = True
         if not self.enabled:
             log_event(log, logging.INFO, "minutes.disabled")
             return
@@ -161,6 +169,7 @@ class MinutesService:
 
     def stop(self) -> None:
         """Stop cleanly, finishing any recording that is running."""
+        self._appliance_started = False
         self._stop.set()
         try:
             self._finish_recording("the appliance is shutting down")
@@ -174,7 +183,7 @@ class MinutesService:
             self._worker = None
 
     def _on_config_change(self, values: dict[str, Any], changed: set[str]) -> None:
-        if "MINUTES_ENABLED" not in changed:
+        if "MINUTES_ENABLED" not in changed or not self._appliance_started:
             return
         if self.enabled:
             self._stop.clear()
@@ -182,6 +191,10 @@ class MinutesService:
         else:
             log_event(log, logging.INFO, "minutes.switched_off")
             self.stop()
+            # stop() means "the appliance is not running this", which is not
+            # what happened here — the appliance is still up, the feature was
+            # merely turned off. Restore the flag so turning it back on works.
+            self._appliance_started = True
 
     # -- the supervisor --------------------------------------------------
     def _supervise(self) -> None:

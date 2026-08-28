@@ -214,8 +214,21 @@ class TestAvailable:
 # ---------------------------------------------------------------------------
 
 
+def embedded(script: str, name: str):
+    """Read a ``var NAME = <json>;`` line back out of a rendered script.
+
+    The same trick ``tests/test_join_flows.py`` uses: it asserts on what was
+    injected without executing a line of JavaScript.
+    """
+    fragment = script.split(f"var {name} = ", 1)[1]
+    value, _ = json.JSONDecoder().raw_decode(fragment)
+    return value
+
+
 class TestScripts:
-    ALL = [
+    #: The scripts this module renders itself. ``build_captions_script`` is the
+    #: join clicker, which has its own tests in ``tests/test_join_flows.py``.
+    OURS = [
         build_probe_script("teams"),
         build_probe_script("meet"),
         build_probe_script("zoom"),
@@ -224,8 +237,8 @@ class TestScripts:
         build_install_script("", "run-token", captions=False),
         build_drain_script("run-token"),
         build_drain_script("run-token", flush=True),
-        build_captions_script(),
     ]
+    ALL = OURS + [build_captions_script()]
 
     @pytest.mark.parametrize("script", ALL, ids=range(len(ALL)))
     def test_the_generated_script_is_valid_javascript(self, script, tmp_path):
@@ -239,29 +252,30 @@ class TestScripts:
         )
         assert result.returncode == 0, result.stderr
 
-    @pytest.mark.parametrize("script", ALL, ids=range(len(ALL)))
+    @pytest.mark.parametrize("script", OURS, ids=range(len(OURS)))
     def test_the_script_is_es5(self, script):
         """It runs in whatever Chromium the Pi happens to have."""
         assert "=>" not in script
         assert "`" not in script
         assert not any(f" {word} " in script for word in ("let", "const"))
 
-    @pytest.mark.parametrize("script", ALL, ids=range(len(ALL)))
+    @pytest.mark.parametrize("script", OURS, ids=range(len(OURS)))
     def test_no_stray_debugging_is_shipped_into_a_meeting(self, script):
         assert "console.log" not in script
         assert "debugger" not in script
 
-    @pytest.mark.parametrize("script", ALL, ids=range(len(ALL)))
+    @pytest.mark.parametrize("script", OURS, ids=range(len(OURS)))
     def test_nothing_is_ever_clicked_by_a_reading_script(self, script):
         """Reading is safe; pressing things changes what the room sees."""
-        if "closed-caption" in script and "WANTED" in script:
-            return  # the one pass allowed to press, tested on its own below
         assert ".click(" not in script
+        assert "setAttribute" not in script, "the page is read, never written to"
 
     def test_a_hostile_run_token_stays_inside_a_string_literal(self, tmp_path):
         """The token is generated, not typed, but json.dumps is free insurance."""
-        script = build_install_script("teams", '"; window.evil = 1; //')
-        assert "window.evil" not in script.replace('\\"', "")
+        hostile = '"; window.evil = 1; //'
+        script = build_install_script("teams", hostile)
+        assert embedded(script, "RUN") == hostile
+        assert embedded(build_drain_script(hostile), "RUN") == hostile
         node = shutil.which("node") or shutil.which("nodejs")
         if not node:
             pytest.skip("Node is not installed (it is not needed on the appliance)")
@@ -285,9 +299,10 @@ class TestScripts:
 
     def test_the_caption_pass_can_only_ever_switch_them_on(self):
         """"Captions" is a substring of "Turn off captions"."""
-        script = build_captions_script()
-        avoid = json.loads(script.split("var AVOID = ", 1)[1].split(";", 1)[0])
+        avoid = embedded(build_captions_script(), "AVOID")
         assert "turn off" in avoid
+        wanted = embedded(build_captions_script(), "WANTED")
+        assert "Turn on live captions" in wanted
 
 
 # ---------------------------------------------------------------------------
@@ -401,9 +416,7 @@ class TestNoMeetingOnScreen:
         assert browser.kinds.count("drain") == 2, browser.kinds
         assert sampler._stop.waits == [2.0], sampler._stop.waits
 
-    def test_a_page_that_is_not_there_yet_is_given_a_moment(
-        self, reading, tmp_path, events, monkeypatch
-    ):
+    def test_a_page_that_is_not_there_yet_is_given_a_moment(self, reading, tmp_path, events):
         """The room may still be working through a pre-join screen."""
         browser = FakeBrowser(install=False)
         sampler = run_sampler(reading, browser, tmp_path, stop_after=4)
@@ -576,7 +589,8 @@ class TestCaptionSegments:
 
     def test_one_turn_never_swallows_the_whole_meeting(self, tmp_path):
         rows = [
-            {"at": float(i * 2), "speaker": "Priya Nair", "text": "and another thing"}
+            {"at": float(i * 2), "speaker": "Priya Nair",
+             "text": f"and another thing about item number {i}"}
             for i in range(120)
         ]
         captions_file(tmp_path, rows)
@@ -638,7 +652,7 @@ class TestCaptionSegments:
     def test_a_diagnostic_string_never_becomes_a_speaker(self, tmp_path):
         captions_file(tmp_path, [
             {"at": 1.0, "speaker": "no-speaking-signal", "text": "hello"},
-            {"at": 5.0, "speaker": "exception:TypeError", "text": "hello again"},
+            {"at": 30.0, "speaker": "exception:TypeError", "text": "a later remark"},
         ])
         assert [s.speaker for s in roster.caption_segments(tmp_path)] == ["", ""]
 
@@ -689,14 +703,15 @@ class TestSampler:
 
     def test_development_mode_starts_nothing_and_says_why(self, config, tmp_path, events):
         config.update({"MINUTES_IDENTIFY_REMOTE": True, "DEV_MODE": True})
+        session = tmp_path / "session"
         browser = FakeBrowser()
         sampler = RosterSampler(config, browser)
-        sampler.start("teams", tmp_path)
+        sampler.start("teams", session)
 
         assert sampler.running is False
         assert browser.scripts == [], "a no-op must not touch the meeting page"
         assert sampler.stop() == []
-        assert list(tmp_path.iterdir()) == []
+        assert not session.exists(), "a no-op must not even make a directory"
         snapshot = sampler.snapshot()
         assert snapshot is not None and snapshot.ok is False
         assert "Development mode" in snapshot.reason
@@ -754,13 +769,30 @@ class TestSampler:
         assert samples[0].participants == ["Priya Nair"]
 
     def test_starting_twice_does_not_start_two_samplers(self, reading, tmp_path):
-        sampler = RosterSampler(reading, FakeBrowser(drains=[drain_payload()] * 20))
-        sampler._stop = CountingEvent(stop_after=40)
+        """Two samplers writing one timeline is the bug the join loop already had."""
+
+        class Blocking:
+            def __init__(self):
+                self.entered = threading.Event()
+                self.release = threading.Event()
+
+            def read_meeting_page(self, script, *, timeout=6.0):
+                self.entered.set()
+                self.release.wait(timeout=10)
+                return None
+
+        browser = Blocking()
+        sampler = RosterSampler(reading, browser)
         sampler.start("teams", tmp_path)
+        assert browser.entered.wait(timeout=5)
+        assert sampler.running is True
         first = sampler._thread
+
         sampler.start("teams", tmp_path)
-        assert sampler._thread is first
-        sampler.stop()
+        assert sampler._thread is first, "the second start must be ignored"
+
+        browser.release.set()
+        assert sampler.stop() == []
 
     def test_a_browser_that_throws_is_survived(self, reading, tmp_path):
         class Exploding:

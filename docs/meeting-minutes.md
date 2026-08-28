@@ -131,7 +131,7 @@ that do this full time.
 | Naming remote speakers from the active-speaker highlight | **Mixed.** Google Meet and Zoom around 70–80%. Microsoft Teams no longer exposes a usable speaking indicator, so on Teams this route is effectively dead and captions are the only option. |
 | Transcribing the room track | **Good on a Pi 5, slow on a Pi 4, hopeless on a Pi 3.** |
 | Recognising faces in the room | **Works close up, fails down the table.** Roughly 90% within 2 m, 40–60% at 3–4 m, near zero beyond 4 m — so perhaps 60–80% of a six-person room named correctly, and the far end of a boardroom table never. |
-| Recognising voices in the room | **The weakest part.** A far-field microphone in a hard-surfaced room is close to the worst case for the technique. Treat it as a suggestion to correct, not an answer to trust. |
+| Recognising voices in the room | **The weakest part**, though better than it used to be. With the recommended model, expect roughly 55–75% of individual segments and 70–85% of whole speaking turns to be attributed correctly, and 15–22% of speech to be people talking over each other and therefore unattributable at all. Treat it as a suggestion to correct, not an answer to trust. |
 | The summary | **Good, and bounded by the transcript.** A summary of a poor transcript is a poor summary, and the prompt is written so that it says so rather than inventing a good one. |
 
 Two things that will not work, and are not bugs:
@@ -187,13 +187,36 @@ each one that was not, exactly what is missing.
 pip install opencv-python-headless numpy
 ```
 
-Then put the two model files in `var/minutes/models`: YuNet (the face detector,
-about 230 KB) and SFace (the recogniser, about 37 MB), both from the OpenCV Zoo.
-The appliance does not download them itself — a room appliance that reaches out
-to the internet on its own is a surprise — and the `/minutes` page names the
-files it is looking for.
+Note `opencv-python-headless` and not the `contrib` build: the detector and
+recogniser used here are in OpenCV's core, and contrib is three times the size
+for nothing this needs.
 
-For voices, `pip install vosk numpy` and fetch `vosk-model-spk-0.4`.
+Then put the two model files in `var/minutes/models`: `face_detection_yunet`
+(about 230 KB) and `face_recognition_sface` (about 37 MB), both from the OpenCV
+Zoo at <https://github.com/opencv/opencv_zoo>. The appliance does not download
+them itself — a room appliance that reaches out to the internet on its own is a
+surprise — and the `/minutes` page names the exact files it is looking for and
+whether it found them.
+
+For voices:
+
+```bash
+pip install sherpa-onnx numpy webrtcvad-wheels
+```
+
+and put a speaker-embedding model — a `.onnx` file with `titanet`, `speaker` or
+`ecapa` in its name — in `var/minutes/models`. TitaNet-small is the one to use:
+about 40 MB, and in testing against twenty speakers in a simulated reverberant
+room it identified the right person 92% of the time, against 38–48% for the
+older alternatives. `sherpa-onnx` brings its own ONNX runtime, so that is the
+whole dependency — no PyTorch and no compiler.
+
+`webrtcvad-wheels` matters more than its size suggests. Without it the appliance
+finds speech by loudness alone, which misses between a third and two thirds of
+it in a real room — so a segment may be half of somebody else's sentence, and
+the appliance will refuse to put a name to any of them. It will still tell
+speakers apart. Note the `-wheels` suffix: plain `webrtcvad` has no ARM build
+and would have to be compiled on the Pi.
 
 ### 4. The summary
 

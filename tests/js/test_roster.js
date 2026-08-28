@@ -5,6 +5,19 @@
 // the scripts are well formed, total, and correct against the DOM shapes the
 // research documented. It says nothing about whether those shapes still match
 // a real page today; only a real meeting settles that.
+//
+// These tests are optional: Node and jsdom are not installed on the appliance
+// and are not needed there. Run them on a development machine with
+//
+//   cd tests/js
+//   npm install jsdom
+//   python3 emit_roster.py     # writes the current roster JS next to the test
+//   node test_roster.js
+//
+// emit_roster.py writes clicker_roster_teams.js, clicker_roster_meet.js,
+// clicker_roster_zoom.js, clicker_roster_generic.js, the observer and drain
+// pair, and clicker_roster_captions.js. All are generated, and all are already
+// ignored by the repository's tests/js/clicker_*.js rule.
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 

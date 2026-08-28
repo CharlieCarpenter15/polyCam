@@ -15,22 +15,61 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 from .. import paths as base
 
-#: Root of everything this feature owns.
-MINUTES_DIR = base.VAR_DIR / "minutes"
+#: Every directory below is derived from ``app.paths.VAR_DIR``, and is worked
+#: out **when it is asked for** rather than when this module is imported.
+#:
+#: That is not fussiness. ``ROOM_APPLIANCE_VAR`` moves the whole writable tree,
+#: and the test suite uses it to give every test its own throw-away directory —
+#: reloading ``app.paths`` to pick the new value up. A constant computed at
+#: import time would have been frozen to wherever the appliance happened to be
+#: pointing the first time anything imported this, so a test would quietly write
+#: its recordings into a real installation's ``var`` and read back the previous
+#: test's meetings. That is exactly what happened before this was made lazy.
+_DERIVED = {
+    "MINUTES_DIR": ("minutes",),
+    "SESSIONS_DIR": ("minutes", "sessions"),
+    "PEOPLE_DIR": ("minutes", "people"),
+    "PEOPLE_FILE": ("minutes", "people", "people.json"),
+    "PHOTOS_DIR": ("minutes", "people", "photos"),
+    "MODELS_DIR": ("minutes", "models"),
+}
 
-#: One directory per recorded meeting.
-SESSIONS_DIR = MINUTES_DIR / "sessions"
 
-#: Enrolled colleagues: the profile index and their reference photos.
-PEOPLE_DIR = MINUTES_DIR / "people"
-PEOPLE_FILE = PEOPLE_DIR / "people.json"
-PHOTOS_DIR = PEOPLE_DIR / "photos"
+def __getattr__(name: str) -> Any:
+    """Resolve ``MINUTES_DIR`` and friends against the current ``VAR_DIR``."""
+    if name not in _DERIVED:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _at(name)
 
-#: Downloaded speech-to-text models (a whisper.cpp ``.bin``, a vosk directory).
-MODELS_DIR = MINUTES_DIR / "models"
+
+def __dir__() -> list[str]:
+    return sorted(list(globals()) + list(_DERIVED))
+
+
+def _at(name: str) -> Path:
+    """One of the directories above, derived from the current ``VAR_DIR``.
+
+    Always derived, never read back off this module. That rules out the class
+    of bug where two callers disagree about where the tree is: there is exactly
+    one answer and it comes from one place.
+
+    It also means ``monkeypatch.setattr`` on one of these names does not move
+    anything, and should not be used. The supported way to point the writable
+    tree somewhere else is the ``ROOM_APPLIANCE_VAR`` environment variable and
+    a reload of ``app.paths`` — which is what the test suite's ``room_dirs``
+    fixture already does for the whole appliance. Patching an attribute here
+    would also outlive the test that did it: the name is resolved lazily, so
+    the patch creates a real module global where there was none, and neither
+    ``monkeypatch`` undoing it nor ``importlib.reload`` removes it again.
+    """
+    root = base.VAR_DIR
+    for part in _DERIVED[name]:
+        root = root / part
+    return root
 
 #: Session ids are generated, never taken from a request, but the resolver
 #: checks anyway: one regex is cheaper than trusting every caller forever.
@@ -49,7 +88,13 @@ def ensure_dirs() -> None:
     so a failure here is swallowed; the callers that actually need to write
     report the error at the point where it matters.
     """
-    for path in (MINUTES_DIR, SESSIONS_DIR, PEOPLE_DIR, PHOTOS_DIR, MODELS_DIR):
+    for path in (
+        _at("MINUTES_DIR"),
+        _at("SESSIONS_DIR"),
+        _at("PEOPLE_DIR"),
+        _at("PHOTOS_DIR"),
+        _at("MODELS_DIR"),
+    ):
         try:
             path.mkdir(parents=True, exist_ok=True, mode=_DIR_MODE)
         except OSError:
@@ -60,7 +105,7 @@ def session_dir(session_id: str) -> Path | None:
     """The directory for ``session_id``, or None if the id is not well formed."""
     if not SESSION_ID_RE.match(session_id or ""):
         return None
-    return SESSIONS_DIR / session_id
+    return _at("SESSIONS_DIR") / session_id
 
 
 def list_session_ids() -> list[str]:
@@ -70,7 +115,7 @@ def list_session_ids() -> list[str]:
     time without opening a single file.
     """
     try:
-        names = [p.name for p in SESSIONS_DIR.iterdir() if p.is_dir()]
+        names = [p.name for p in _at("SESSIONS_DIR").iterdir() if p.is_dir()]
     except OSError:
         return []
     return sorted((n for n in names if SESSION_ID_RE.match(n)), reverse=True)
@@ -87,7 +132,7 @@ def photo_path(person_id: str, index: int, suffix: str = ".jpg") -> Path | None:
         return None
     if suffix not in (".jpg", ".png"):
         return None
-    return PHOTOS_DIR / f"{person_id}-{index:02d}{suffix}"
+    return _at("PHOTOS_DIR") / f"{person_id}-{index:02d}{suffix}"
 
 
 def find_photo(person_id: str, index: int) -> Path | None:
@@ -95,7 +140,7 @@ def find_photo(person_id: str, index: int) -> Path | None:
     if not PERSON_ID_RE.match(person_id or "") or not 0 <= index < 100:
         return None
     for suffix in (".jpg", ".png"):
-        candidate = PHOTOS_DIR / f"{person_id}-{index:02d}{suffix}"
+        candidate = _at("PHOTOS_DIR") / f"{person_id}-{index:02d}{suffix}"
         if candidate.is_file():
             return candidate
     return None

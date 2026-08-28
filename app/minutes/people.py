@@ -239,10 +239,18 @@ class PeopleStore:
     """The people file, loaded once and written atomically on every change."""
 
     def __init__(self, path: Any = None) -> None:
-        self._path = path or paths.PEOPLE_FILE
+        # Resolved on use rather than here, for the same reason the paths module
+        # resolves its directories on use: the writable tree can be pointed
+        # somewhere else, and a store that captured the location when it was
+        # constructed would keep writing to the old one.
+        self._explicit_path = path
         self._lock = threading.RLock()
         self._people: dict[str, Person] = {}
         self._loaded = False
+
+    @property
+    def _path(self) -> Any:
+        return self._explicit_path or paths.PEOPLE_FILE
 
     # -- loading ---------------------------------------------------------
     def load(self) -> None:

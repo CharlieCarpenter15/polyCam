@@ -219,6 +219,10 @@ def page():
     if service is None:
         # The same answer /panel and /controller give for a switched-off
         # feature: the page that would have been here is simply not here.
+        context.update(
+            disabled_what="Meeting minutes",
+            disabled_where="Meeting minutes &rarr; <em>Record and write up meetings</em>",
+        )
         return render_template("disabled.html", **context), 404
     context.update(
         active_page="minutes",

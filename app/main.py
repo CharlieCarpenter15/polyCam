@@ -252,11 +252,30 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             return redirect(url_for("login", next="/panel"))
         return render_template("panel.html", **template_context())
 
+    #: What ``disabled.html`` should say for each page that can be switched off.
+    DISABLED_TEXT = {
+        "controller": (
+            "The room controller",
+            "Room controller (phone) &rarr; <em>Enable the room controller</em>",
+        ),
+        "minutes": (
+            "Meeting minutes",
+            "Meeting minutes &rarr; <em>Record and write up meetings</em>",
+        ),
+    }
+
+    def disabled_page(which: str = ""):
+        context = template_context()
+        what, where = DISABLED_TEXT.get(which, ("", ""))
+        if what:
+            context.update(disabled_what=what, disabled_where=where)
+        return render_template("disabled.html", **context), 404
+
     @app.route("/controller")
     def controller_page():
         """The big-button page a phone gets by scanning the code on the TV."""
         if not config.bool_("CONTROLLER_ENABLED"):
-            return render_template("disabled.html", **template_context()), 404
+            return disabled_page("controller")
         if not is_controller():
             return redirect(url_for("controller_locked"))
         context = template_context()
@@ -272,7 +291,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         """Where the QR code on the TV points. Pairs the phone, then gets out of
         the way: from here on the phone can just open /controller."""
         if not config.bool_("CONTROLLER_ENABLED"):
-            return render_template("disabled.html", **template_context()), 404
+            return disabled_page("controller")
         if not pair_controller(token):
             return redirect(url_for("controller_locked"))
         if config.bool_("CONTROLLER_REQUIRE_PIN") and not is_admin():

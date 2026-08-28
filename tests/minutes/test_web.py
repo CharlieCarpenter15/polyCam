@@ -279,16 +279,14 @@ class FakeMinutes:
 def minutes_paths(room_dirs):
     """Point ``app/minutes/paths.py`` at the temporary var directory.
 
-    Its constants are computed at import time from ``app.paths.VAR_DIR``, which
-    ``room_dirs`` has just redirected, so the module has to be reloaded or the
-    tests would write into a real installation's tree.
+    Nothing to do beyond ``room_dirs``: every name in that module is derived
+    from ``app.paths.VAR_DIR`` when it is read, so redirecting the appliance's
+    writable tree redirects this too.
     """
     from app.minutes import paths as minutes_paths_module
 
-    importlib.reload(minutes_paths_module)
     minutes_paths_module.ensure_dirs()
-    yield minutes_paths_module
-    importlib.reload(minutes_paths_module)
+    return minutes_paths_module
 
 
 @pytest.fixture()
