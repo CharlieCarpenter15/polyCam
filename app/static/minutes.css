@@ -1,0 +1,318 @@
+/* ==========================================================================
+   Meeting minutes.
+
+   A companion to admin.css, not a replacement: every colour, radius and tap
+   size below is one of that file's custom properties, so this page inherits
+   the theme, the accent and the light/dark switch without knowing about any
+   of them. Only what admin.css has no class for is defined here — people
+   cards, a transcript, a live elapsed time.
+
+   Mobile-first like the rest: this is read standing in a meeting room on a
+   phone at least as often as it is read at a desk, so the narrow layout is the
+   real one and 380px is the width that has to work.
+   ========================================================================== */
+
+/* admin.css already forces this, and it is repeated because this stylesheet
+   is loaded after it and sets `display` on several things that get toggled.
+   Without it, `hidden` loses to a class selector and the meeting detail sits
+   permanently open underneath the list. */
+[hidden] { display: none !important; }
+
+/* --------------------------------------------------------------- headings */
+
+.mn-sub {
+  margin: 22px 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.mn-sub:first-child { margin-top: 4px; }
+
+/* --------------------------------------------------------- what is running */
+
+.mn-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 93, 93, 0.12);
+  border: 1px solid rgba(255, 93, 93, 0.35);
+}
+
+.mn-now-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.mn-now-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.mn-rec-dot {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--error);
+  animation: mn-pulse 2s ease-in-out infinite;
+}
+
+/* A recording light that breathes reads as "now" in a way a static dot does
+   not. Anybody who has asked not to see motion gets the static dot. */
+@keyframes mn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mn-rec-dot { animation: none; }
+}
+
+.mn-elapsed {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--error);
+}
+
+/* ---------------------------------------------------------- capability list */
+
+/* A check row whose reason needs a second line: the reason is the useful part,
+   so it gets the width rather than being squeezed into the right-hand column. */
+.mn-check { display: block; }
+.mn-check-top { display: flex; align-items: center; gap: 11px; }
+.mn-check-top .check-name { flex: 1 1 auto; font-weight: 550; }
+
+.mn-why {
+  margin: 5px 0 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.mn-badge {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+.mn-badge-ok   { background: rgba(61, 220, 132, 0.16); color: var(--ok); }
+.mn-badge-off  { background: var(--surface-3); color: var(--text-faint); }
+.mn-badge-warn { background: rgba(255, 176, 32, 0.16); color: var(--warn); }
+
+/* ------------------------------------------------------------------ people */
+
+.mn-add { margin: 4px 0 18px; }
+
+.mn-people { display: flex; flex-direction: column; gap: 12px; }
+
+.mn-person {
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.mn-person-head { display: flex; align-items: flex-start; gap: 12px; }
+.mn-person-text { flex: 1 1 auto; min-width: 0; }
+
+.mn-person-name {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mn-person-sub {
+  display: block;
+  font-size: 13px;
+  color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+
+.mn-photos { display: flex; gap: 6px; flex: 0 0 auto; }
+
+.mn-photo {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+
+.mn-photo-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+  color: var(--text-faint);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mn-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 11px 0 0; }
+
+.mn-tag {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+.mn-tag-on  { background: rgba(61, 220, 132, 0.16); color: var(--ok); }
+.mn-tag-off { color: var(--text-faint); }
+
+.mn-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* Every action fits a thumb even when four of them wrap onto two rows. */
+.mn-actions .btn { flex: 1 1 auto; min-width: 108px; }
+
+/* The sample length sits with the button it belongs to rather than in a field
+   of its own, so the row still reads as one action. */
+.mn-actions select {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 38px;
+  padding: 0 9px;
+  font-size: 14px;
+}
+
+.mn-edit { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+/* --------------------------------------------------------------- meetings */
+
+.mn-stage {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.mn-stage-sent   { background: rgba(61, 220, 132, 0.16); color: var(--ok); }
+.mn-stage-failed { background: rgba(255, 93, 93, 0.16); color: var(--error); }
+.mn-stage-busy   { background: rgba(255, 176, 32, 0.16); color: var(--warn); }
+
+.mn-open {
+  /* The whole row opens the meeting; the button is a visible affordance for
+     that rather than a separate action. */
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------- one meeting */
+
+.mn-summary {
+  padding: 13px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mn-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.mn-name-row:last-child { border-bottom: none; }
+
+.mn-name-label {
+  flex: 1 1 130px;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.mn-name-count { font-weight: 400; color: var(--text-faint); font-size: 13px; }
+
+.mn-name-row select { flex: 1 1 160px; width: auto; min-width: 0; }
+.mn-name-row .btn { flex: 0 0 auto; }
+.mn-name-new { flex: 1 1 160px; width: auto; min-width: 0; }
+
+.mn-transcript {
+  max-height: 60vh;
+  overflow: auto;
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.mn-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 9px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.mn-line:last-child { border-bottom: none; }
+
+.mn-line-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--text-faint);
+  padding-top: 3px;
+}
+
+.mn-line-who {
+  flex: 0 0 auto;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.mn-line-who.remote { color: var(--accent); }
+.mn-line-who.unknown { color: var(--text-faint); }
+
+.mn-line-text { flex: 1 1 100%; overflow-wrap: anywhere; }
+
+/* The "who was this?" control sits on the line itself, because that is where
+   somebody realises they know the answer. */
+.mn-who-btn {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.mn-who-btn:hover { border-color: var(--accent); color: var(--accent); }
+.mn-who-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.mn-src {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  padding-top: 4px;
+}
+
+/* --------------------------------------------------------- narrow phones */
+
+@media (max-width: 430px) {
+  .mn-person-head { gap: 10px; }
+  .mn-photo, .mn-photo-blank { width: 44px; height: 44px; }
+  .mn-elapsed { font-size: 17px; }
+  .mn-actions .btn { min-width: 96px; }
+}
+
+@media (max-width: 380px) {
+  /* Two buttons per row rather than three squeezed ones. */
+  .mn-actions .btn { flex: 1 1 calc(50% - 4px); min-width: 0; }
+  .mn-name-row select, .mn-name-new { flex: 1 1 100%; }
+  .mn-line-text { font-size: 14px; }
+}

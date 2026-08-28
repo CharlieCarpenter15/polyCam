@@ -44,6 +44,7 @@ network. No keyboard, no YAML, no SSH.
 - [The control panel](#the-control-panel)
 - [The room controller (scan the code)](#the-room-controller-scan-the-code)
 - [Background slideshow](#background-slideshow)
+- [Meeting minutes (experimental)](#meeting-minutes-experimental)
 - [Keeping the software up to date](#keeping-the-software-up-to-date)
 - [Poly conference bar](#poly-conference-bar)
 - [Poly remote / controller](#poly-remote--controller)
@@ -458,6 +459,38 @@ read from across the room.
 Uploads are checked by their actual file contents, not their filename, so a
 renamed file cannot slip something else onto the screen. Images are stored in
 `var/backgrounds`.
+
+---
+
+## Meeting minutes (experimental)
+
+The appliance can record each meeting, work out who said what, ask Claude for a
+summary and email it to the people who were there.
+
+**It is off by default and every part of it is a separate switch.** With it off,
+no thread starts, no microphone or camera is opened and nothing is written to
+disk — the room screen, the calendar and the meeting joining behave exactly as
+they do without it.
+
+The idea it is built on is that the room microphone and the speaker's own output
+are recorded as **two separate tracks**. Which track a voice arrives on decides
+whether the speaker was in the room or on the call, and that is a fact rather
+than a guess. On top of that: the meeting window's own participant list and
+captions name the remote speakers, and enrolled faces and voices name the people
+in the room. Where nothing knows, the line stays unattributed rather than being
+given to somebody — a confidently wrong name is far worse than a blank one.
+
+Turning it on, enrolling colleagues, the optional pieces you need to install, and
+an honest account of what works well and what does not, are all in
+**[docs/meeting-minutes.md](docs/meeting-minutes.md)**. Read it first: recording
+a room full of people is a legal and social decision as much as a technical one,
+and some of the recognition is genuinely experimental.
+
+The short version of the honest part: recording is reliable; naming remote
+speakers works well where live captions are on and is patchy otherwise;
+recognising faces works close to the camera and fails down a long table;
+recognising voices on a far-field microphone is the weakest link and should be
+treated as a suggestion you correct rather than an answer you trust.
 
 ---
 

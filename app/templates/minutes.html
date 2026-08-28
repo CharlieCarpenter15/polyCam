@@ -1,0 +1,235 @@
+{#
+  Meeting minutes: status, the people the room may recognise, the meetings it
+  has written up, and two buttons that prove the plumbing works.
+
+  Rendered as an empty shell. Every list on this page is drawn by minutes.js
+  from /api/minutes/*, because the whole page has to keep changing while it is
+  open — a recording starts, the worker moves on, a summary lands — and a page
+  that only told the truth at the moment it was served would be worse than no
+  page at all.
+#}
+{% extends "base.html" %}
+{% set active_page = 'minutes' %}
+{% block title %}Meeting minutes · {{ room_name }}{% endblock %}
+
+{% block content %}
+  {#
+    base.html has no block inside <head> and is shared with every other admin
+    page, so this page's own stylesheet is linked here instead. `rel=stylesheet`
+    is allowed in the body, it is served from this appliance, and the
+    Content-Security-Policy permits it.
+  #}
+  <link rel="stylesheet" href="{{ url_for('static', filename='minutes.css') }}">
+
+  <div class="notice notice-warn">
+    <strong>This feature records people.</strong> Recording a meeting has legal
+    and social consequences that vary by country and by company. Tell the room,
+    leave the on-screen recording notice on, and read
+    <code>docs/meeting-minutes.md</code> before relying on any of this.
+  </div>
+
+  <!-- 1 · Status ---------------------------------------------------------
+       The diagnostic story for the whole feature. Every "unavailable" here
+       carries the reason it is unavailable, and those reasons are written to
+       be acted on, so they are shown in full rather than summarised away. -->
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Status</h2>
+      <span class="pill" id="minutes-pill"><span class="dot" id="minutes-dot"></span><span id="minutes-state">Loading…</span></span>
+    </div>
+    <div class="block-body">
+
+      <div class="mn-now" id="recording-row" hidden>
+        <span class="mn-rec-dot" aria-hidden="true"></span>
+        <div class="mn-now-text">
+          <span class="mn-now-title" id="recording-title">Recording</span>
+          <span class="block-note" style="margin:0" id="recording-sub"></span>
+        </div>
+        <span class="mn-elapsed" id="recording-elapsed">0:00</span>
+      </div>
+
+      <p class="block-note" style="margin-left:0" id="idle-note" hidden>
+        Nothing is being recorded. A recording starts by itself when the room
+        joins a meeting.
+      </p>
+
+      <p class="block-note" style="margin-left:0" id="worker-row" hidden>
+        Writing up <span id="worker-text"></span>. Transcribing an hour of
+        speech on a Raspberry Pi takes a while; the page will catch up.
+      </p>
+
+      <div class="notice notice-error" id="status-error" hidden></div>
+
+      <h3 class="mn-sub">What this room can do</h3>
+      <ul class="check-list" id="capability-list">
+        <li class="check"><span class="check-name">Loading…</span></li>
+      </ul>
+
+      <h3 class="mn-sub">What is installed</h3>
+      <p class="block-note" style="margin-left:0">
+        Everything below is optional. A missing piece switches one capability
+        off and changes nothing else.
+      </p>
+      <ul class="check-list" id="dependency-list"></ul>
+
+      <h3 class="mn-sub">Speech-to-text</h3>
+      <ul class="check-list" id="engine-list"></ul>
+
+      <div class="btn-row" style="margin-top:14px">
+        <a class="btn btn-small btn-quiet" href="{{ url_for('settings_page') }}">Open Settings</a>
+        <button class="btn btn-small btn-quiet" id="refresh-status">Check again</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · People ---------------------------------------------------------- -->
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">People</h2>
+      <span class="block-note" style="margin:0" id="people-count"></span>
+    </div>
+    <div class="block-body">
+      <p class="block-note" style="margin-left:0">
+        The colleagues this room is allowed to recognise. Nobody else is
+        matched against anything. Face and voice recognition are
+        <strong>experimental</strong>: recognising a face across a boardroom
+        table is hard and recognising a voice on a far-field microphone is
+        harder, so treat what the room suggests as a first guess you correct —
+        which is exactly what naming a speaker in a transcript does.
+      </p>
+
+      <details class="mn-add" id="add-person-block">
+        <summary class="advanced-summary">Add somebody</summary>
+        <div style="padding-top:14px">
+          <div class="field">
+            <label class="field-label" for="person-name">Name</label>
+            <input type="text" id="person-name" autocomplete="off" placeholder="Charlie Carpenter">
+          </div>
+          <div class="field">
+            <label class="field-label" for="person-email">Email address</label>
+            <p class="field-help">Where their copy of the minutes goes. Optional.</p>
+            <input type="text" id="person-email" autocomplete="off" inputmode="email"
+                   placeholder="charlie@example.com">
+          </div>
+          <div class="field">
+            <label class="field-label" for="person-notes">Notes</label>
+            <p class="field-help">For you, not for the summary. “Sits at the far end”, that sort of thing.</p>
+            <input type="text" id="person-notes" autocomplete="off">
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="person-add">Add person</button>
+          </div>
+        </div>
+      </details>
+
+      <div class="mn-people" id="people-list"></div>
+      <p class="empty-note" id="people-empty">Loading people…</p>
+
+      {# One input, reused by whichever card asked for it: a file picker per
+         person would put dozens of them on the page for no benefit. #}
+      <input type="file" id="photo-input" accept="image/jpeg,image/png,image/gif,image/webp" hidden>
+    </div>
+  </section>
+
+  <!-- 3 · Meetings -------------------------------------------------------- -->
+  <section class="block" id="sessions-block">
+    <div class="block-head">
+      <h2 class="block-title">Meetings</h2>
+      <button class="btn btn-small btn-quiet" id="refresh-sessions">Refresh</button>
+    </div>
+    <div class="block-body">
+      <ul class="meeting-list" id="session-list"></ul>
+      <p class="empty-note" id="session-empty">Loading meetings…</p>
+      <p class="block-note" style="margin-left:0" id="retention-note"></p>
+      <div class="btn-row">
+        <button class="btn btn-small btn-quiet" id="sweep-now">Delete expired meetings now</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3b · One meeting ---------------------------------------------------- -->
+  <section class="block" id="session-detail" hidden>
+    <div class="block-head">
+      <h2 class="block-title" id="detail-title">Meeting</h2>
+      <button class="btn btn-small btn-quiet" id="detail-back">Back</button>
+    </div>
+    <div class="block-body">
+      <dl class="kv" id="detail-facts"></dl>
+
+      <div class="notice notice-warn" id="detail-error" hidden></div>
+
+      <h3 class="mn-sub">Summary</h3>
+      <div class="mn-summary" id="detail-summary"></div>
+      <p class="block-note" style="margin-left:0" id="detail-summary-missing" hidden></p>
+
+      <h3 class="mn-sub">Who was speaking</h3>
+      <p class="block-note" style="margin-left:0">
+        Put a name to each unidentified speaker. The transcript is corrected and
+        the appliance learns that voice from the lines it just got wrong, which
+        is by far the easiest way to enrol somebody.
+      </p>
+      <div id="naming-list"></div>
+      <p class="block-note" style="margin-left:0" id="naming-none" hidden>
+        Everybody in this transcript already has a name.
+      </p>
+
+      <h3 class="mn-sub">Transcript</h3>
+      <div class="mn-transcript" id="detail-transcript"></div>
+      <p class="empty-note" id="detail-transcript-empty" hidden>
+        There is no transcript for this meeting.
+      </p>
+
+      <h3 class="mn-sub">Sent to</h3>
+      <div class="chip-list" id="detail-recipients"></div>
+      <p class="block-note" style="margin-left:0" id="detail-delivery"></p>
+
+      <div class="btn-row" style="margin-top:18px">
+        <button class="btn" id="detail-reprocess">Write it up again</button>
+        <button class="btn btn-danger" id="detail-delete">Delete this meeting</button>
+      </div>
+      <p class="block-note" style="margin-left:0">
+        Writing it up again re-runs the summary and the email with whatever is
+        configured now. Deleting removes the audio, the transcript and the
+        summary from this appliance; anything already emailed has left.
+      </p>
+    </div>
+  </section>
+
+  <!-- 4 · Try it ---------------------------------------------------------- -->
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Try it</h2></div>
+    <div class="block-body">
+
+      <div class="field">
+        <label class="field-label" for="test-email-to">Send a test email</label>
+        <p class="field-help">
+          Proves this appliance can reach your mail server. Nothing is recorded
+          and no meeting is involved.
+        </p>
+        <input type="text" id="test-email-to" autocomplete="off" inputmode="email"
+               placeholder="you@example.com">
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="test-email-send">Send test email</button>
+      </div>
+
+      <div class="field" style="margin-top:22px">
+        <span class="field-label">Look at the room now</span>
+        <p class="field-help">
+          Takes one look through the conference-bar camera and says which
+          enrolled colleagues it recognises. Only works between meetings — during
+          a meeting the camera belongs to the meeting.
+        </p>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="look-now">Look at the room</button>
+      </div>
+      <p class="block-note" style="margin-left:0" id="look-result"></p>
+    </div>
+  </section>
+
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='minutes.js') }}"></script>
+{% endblock %}

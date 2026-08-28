@@ -316,7 +316,15 @@
     var message = "";
     var level = "info";
 
-    if (!payload.network_ok) {
+    var minutes = payload.minutes || {};
+
+    // A recording in progress outranks everything else here. It is the one
+    // notice somebody walking into the room is entitled to see before they say
+    // anything, so it is not allowed to queue behind a stale-calendar warning.
+    if (minutes.recording && minutes.notice) {
+      message = minutes.notice;
+      level = "warn";
+    } else if (!payload.network_ok) {
       message = "No network connection. Meetings will update automatically when it returns.";
       level = "error";
     } else if (payload.calendar && !payload.calendar.configured) {
@@ -328,6 +336,13 @@
     } else if (payload.calendar && !payload.calendar.ok && payload.calendar.error) {
       message = "Calendar: " + payload.calendar.error;
       level = "warn";
+    }
+
+    // Nothing is wrong, but the room may still owe people the standing notice
+    // that meetings held here are recorded.
+    if (!message && minutes.notice) {
+      message = minutes.notice;
+      level = "info";
     }
 
     if (!message) {

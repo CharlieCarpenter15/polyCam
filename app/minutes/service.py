@@ -456,19 +456,13 @@ class MinutesService:
         prior = self._prior_summaries(meta)
         result = summarize.summarise(written, self.config, prior)
         write_json(directory / "summary.json", result.to_dict(), mode=0o600)
+        # summarize.py has already logged the outcome, with the model and the
+        # token counts. Logging it again here would put every summary in the
+        # journal twice and make the second one look like a second attempt.
         if not result.ok:
-            log_event(
-                log, logging.WARNING, "minutes.summary_failed",
-                session=meta.session_id, error=result.error,
-            )
             return False, result.error
         meta.stage = STAGE_SUMMARISED
         self._write_meta(meta, directory)
-        log_event(
-            log, logging.INFO, "minutes.summary_written",
-            session=meta.session_id, model=result.model,
-            input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-        )
         return True, ""
 
     def _send(self, meta: SessionMeta, directory: Path, written: Transcript) -> None:
@@ -519,7 +513,7 @@ class MinutesService:
             out.append(
                 {
                     "title": other.title,
-                    "date": other.started_at,
+                    "date": _readable_date(other.started_at),
                     "summary": summary.text,
                 }
             )
@@ -893,3 +887,17 @@ class MinutesService:
 
 def _cap(ok: bool, why: str) -> dict[str, Any]:
     return {"ok": bool(ok), "detail": why}
+
+
+def _readable_date(stamp: str) -> str:
+    """``2026-08-21T09:00:00+00:00`` as ``21 August 2026``.
+
+    The prompt puts these above earlier summaries as headings, and a person
+    reading the summary will see them, so an ISO timestamp is the wrong shape.
+    An unparseable value is handed back untouched rather than dropped: a odd
+    date is more use than no date.
+    """
+    try:
+        return datetime.fromisoformat(stamp).strftime("%d %B %Y").lstrip("0")
+    except (TypeError, ValueError):
+        return stamp

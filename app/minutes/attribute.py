@@ -255,9 +255,12 @@ def _participants(
         for name in getattr(sample, "participants", []) or []:
             add(name, where="remote", source="roster")
 
-    # Anybody a voice matched who is not already accounted for.
+    # Anybody a voice matched who is not already accounted for. A voice label
+    # only counts as a person when it carries a profile id: the voice pass also
+    # invents labels like "Room speaker 2" to keep two unidentified people
+    # apart, and those are a reading aid, not somebody to put on an email.
     for segment in written.segments:
-        if segment.speaker and segment.source == SOURCE_VOICE:
+        if segment.speaker and segment.source == SOURCE_VOICE and segment.person_id:
             add(segment.speaker, where="room", source="voice", person_id=segment.person_id)
 
     return out
