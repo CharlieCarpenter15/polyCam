@@ -623,7 +623,11 @@ whisper_build_dependencies() {
 }
 
 whisper_from_source() {
-  local source_dir="$ROOT/var/build/whisper.cpp" built
+  # $VAR_DIR, not $ROOT/var: the writable tree can be moved with
+  # ROOM_APPLIANCE_VAR, and the reason a room moves it is usually to keep
+  # hundreds of megabytes of churn off the SD card. Building here would put it
+  # straight back.
+  local source_dir="$VAR_DIR/build/whisper.cpp" built
   whisper_build_dependencies || return 1
   require_space "$VAR_DIR" 900 "building whisper.cpp" || return 1
 
