@@ -44,6 +44,7 @@ from . import attribute, audio, deps, faces, mailer, paths, roster, summarize, t
 from .people import KIND_FACE, KIND_VOICE, PeopleStore
 from .transcript import (
     SOURCE_MANUAL,
+    TRACK_ROOM,
     Participant,
     SessionMeta,
     Transcript,
@@ -465,7 +466,12 @@ class MinutesService:
             self._save_transcript(directory, written)
             self._apply_audio_retention(directory)
 
-        if self.config.bool_("MINUTES_SUMMARY_ENABLED"):
+        if self.config.bool_("MINUTES_SUMMARY_ENABLED") and not written.has_words:
+            log_event(
+                log, logging.INFO, "minutes.summary_skipped",
+                session=session_id, reason="no words were transcribed",
+            )
+        elif self.config.bool_("MINUTES_SUMMARY_ENABLED"):
             ok, error = self._summarise(meta, directory, written)
             if not ok:
                 meta.error = error
@@ -517,6 +523,21 @@ class MinutesService:
                     "speaker were removed, because the captions already had them."
                 )
 
+        # Speech-to-text switched off, or an engine that recognised nothing.
+        # The setting promises that the appliance still works out who spoke, so
+        # fall back to finding the speech itself: no words, but a record of who
+        # held the floor and for how long, which is what was asked for.
+        if not any(s.track == TRACK_ROOM for s in merged):
+            room_wav = directory / "room.wav"
+            if room_wav.exists():
+                heard = voiceprint.speech_segments(room_wav, TRACK_ROOM)
+                if heard:
+                    merged = sorted(merged + heard, key=lambda item: item.start)
+                    notices.append(
+                        f"No words were transcribed from the room, so this is a "
+                        f"record of who spoke and when: {len(heard)} turns."
+                    )
+
         written.segments = merged
         notices.extend(notes)
 
@@ -542,10 +563,25 @@ class MinutesService:
             room_name=self.config.join_display_name(),
         )
         written.notices = notices
-        error = "" if written.segments else (
-            notices[0] if notices else "Nothing was transcribed."
+
+        # A meeting where nobody said anything the appliance could hear is not
+        # a failure. The recording worked, the pipeline ran, and the honest
+        # answer is an empty transcript with a line saying so — somebody
+        # reading it should be able to tell "the microphone was not working"
+        # apart from "nobody spoke". Only a meeting with no audio at all
+        # counts as failed, because then something really did go wrong.
+        if written.segments:
+            return written, ""
+        if not any(directory.glob("*.wav")) and not caption_segments:
+            return written, (
+                notices[0] if notices else "Nothing was recorded for this meeting."
+            )
+        notices.append(
+            "No speech was heard in this recording. That may mean nobody spoke, "
+            "or that the microphone was not picking the room up."
         )
-        return written, error
+        written.notices = notices
+        return written, ""
 
     def _summarise(self, meta: SessionMeta, directory: Path, written: Transcript) -> tuple[bool, str]:
         prior = self._prior_summaries(meta)

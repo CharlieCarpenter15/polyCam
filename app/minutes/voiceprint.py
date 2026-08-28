@@ -63,7 +63,7 @@ from typing import Any, Iterable, Sequence
 from ..logging_setup import get_logger, log_event
 from . import deps, paths
 from .people import KIND_VOICE, PeopleStore
-from .transcript import Segment
+from .transcript import TRACK_FAR_END, TRACK_ROOM, Segment
 
 log = get_logger("minutes.voice")
 
@@ -247,6 +247,26 @@ def speech_spans(path: Path) -> list[tuple[float, float]]:
         return []
     frames = _vad_frames(raw) if deps.available("webrtcvad") else _energy_frames(raw)
     return _spans_from_frames(frames, _VAD_FRAME_MS / 1000.0)
+
+
+def speech_segments(path: Path, track: str = TRACK_ROOM) -> list[Segment]:
+    """Who spoke and when, with no words — a transcript without transcription.
+
+    This is what the appliance produces when speech-to-text is switched off, or
+    when an engine ran and recognised nothing. A record of the shape of a
+    meeting — how many people spoke, for how long, in what order, and, where
+    voices are enrolled, which of them was which — is genuinely useful on its
+    own, and it is what somebody who turned transcription off on a slow Pi
+    asked for. An empty file would be the wrong answer to that request.
+
+    The segments carry no text. Everything downstream already copes: the
+    attribution rules only look at times and tracks, and the renderer writes a
+    duration where the words would go.
+    """
+    return [
+        Segment(start=start, end=end, text="", track=track)
+        for start, end in speech_spans(path)
+    ]
 
 
 def _vad_frames(raw: bytes) -> list[bool]:

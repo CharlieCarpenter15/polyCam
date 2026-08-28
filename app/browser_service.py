@@ -27,11 +27,13 @@ import json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import urlsplit
 
-from .cdp import CDPError, ChromeDevTools
+from .cdp import CDPError, ChromeDevTools, looks_useful
 from .config import ConfigManager
 from .config_schema import FIELDS_BY_KEY
 from .join_flows import (
@@ -637,6 +639,46 @@ class BrowserService:
             except ValueError:
                 return None
         return raw
+
+    def read_meeting_frames(
+        self,
+        script: str,
+        *,
+        useful: Callable[[Any], bool] | None = None,
+        timeout: float = 6.0,
+        user_gesture: bool = False,
+    ) -> Any:
+        """:meth:`read_meeting_page`, willing to look inside the page's frames.
+
+        The same door with the same guarantees — a meeting must be on screen,
+        nothing navigates, every failure is "no answer" — but when the top
+        frame has nothing to say it asks each child frame in turn and returns
+        the first reply ``useful`` accepts.
+
+        That matters for exactly one reason: a meeting stage on a different
+        origin from the page around it is out of process, and a script in the
+        top frame cannot see into it *at all*. Reaching it costs a frame walk,
+        which is why this is a separate door rather than a change to the one
+        every reading pass already goes through.
+
+        ``useful`` is asked about the decoded reply, not the raw string, so a
+        caller can write the honest test — "does this name anybody?" — rather
+        than picking at JSON.
+        """
+        if self.target != TARGET_MEETING:
+            return None
+
+        def answered(raw: Any) -> bool:
+            reply = _decoded(raw)
+            return bool(useful(reply)) if useful is not None else looks_useful(reply)
+
+        try:
+            raw = self._cdp.evaluate_in_frames(
+                script, useful=answered, timeout=timeout, user_gesture=user_gesture
+            )
+        except (CDPError, OSError, ValueError):
+            return None
+        return _decoded(raw)
 
     def toggle_meeting_mute(self) -> bool:
         """Press the meeting page's own mute control, where there is one."""

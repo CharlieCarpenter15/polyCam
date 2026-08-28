@@ -219,6 +219,16 @@ class Transcript:
     def word_count(self) -> int:
         return sum(len(s.text.split()) for s in self.segments)
 
+    @property
+    def has_words(self) -> bool:
+        """Is there anything here to summarise?
+
+        False for a transcript made without speech-to-text: it records who
+        spoke and when, which is worth keeping and worth reading, and is not
+        something to send to a model and ask for the decisions in.
+        """
+        return self.word_count > 0
+
     def speakers(self) -> list[str]:
         """Every distinct label that appears, in order of first appearance."""
         seen: list[str] = []
@@ -259,7 +269,8 @@ class Transcript:
         transcript for a short meeting.
         """
         lines = [
-            f"[{_clock(segment.start)}] {segment.label()}: {segment.text}"
+            f"[{_clock(segment.start)}] {segment.label()}: "
+            f"{segment.text or _spoke_for(segment.duration)}"
             for segment in sorted(self.segments, key=lambda s: s.start)
         ]
         body = "\n".join(lines)
@@ -320,6 +331,17 @@ class Transcript:
             "remote": [p.name for p in self.participants if p.where == "remote"],
             "invited": list(self.meta.invited),
         }
+
+
+def _spoke_for(seconds: float) -> str:
+    """What to write where the words would be, when there are none.
+
+    A segment with no text is not a mistake — it is what the appliance produces
+    when transcription is switched off, and it still says that somebody spoke,
+    for how long, and often who. Writing nothing at all would make an empty
+    line look like a bug.
+    """
+    return f"[spoke for {max(1, int(round(seconds)))}s]"
 
 
 def _clock(seconds: float) -> str:

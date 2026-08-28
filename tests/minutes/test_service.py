@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.minutes import paths as mpaths
+from app.minutes import service as svc_module
 from app.minutes.service import (
     STAGE_CAPTURED,
     STAGE_RECORDING,
@@ -223,6 +224,49 @@ class TestProcessing:
         service.process(session_id)
         notices = service.get_session(session_id)["transcript"]["notices"]
         assert notices, "the transcript should say the recording was a mock one"
+
+
+class TestWhenTranscriptionIsSwitchedOff:
+    """The setting says “none” still identifies who spoke. Prove it does."""
+
+    def test_a_recording_still_becomes_a_record_of_who_spoke(self, service):
+        service.config.update({"MINUTES_STT_ENGINE": "none", "MINUTES_KEEP_AUDIO_DAYS": 7})
+        session_id = record_a_meeting(service)
+        ok, error = service.process(session_id)
+        assert ok, error
+
+        detail = service.get_session(session_id)
+        assert detail["meta"]["stage"] == "transcribed"
+        assert detail["transcript"] is not None
+
+    def test_a_meeting_where_nobody_spoke_is_not_a_failure(self, service):
+        """The recording worked. An empty transcript is the honest answer."""
+        service.config.update({"MINUTES_STT_ENGINE": "none", "MINUTES_KEEP_AUDIO_DAYS": 7})
+        session_id = record_a_meeting(service)
+        service.process(session_id)
+
+        detail = service.get_session(session_id)
+        assert detail["meta"]["stage"] != "failed"
+        notices = " ".join(detail["transcript"]["notices"])
+        assert "No speech was heard" in notices
+        assert "microphone" in notices, "say what it might mean, not just that it happened"
+
+    def test_a_wordless_transcript_is_never_sent_to_a_model(self, service, monkeypatch):
+        """Asking for the decisions in a file with no words is a waste of money."""
+        called = []
+        monkeypatch.setattr(
+            svc_module.summarize, "summarise", lambda *a, **k: called.append(1)
+        )
+        service.config.update(
+            {
+                "MINUTES_STT_ENGINE": "none",
+                "MINUTES_KEEP_AUDIO_DAYS": 7,
+                "MINUTES_SUMMARY_ENABLED": True,
+            }
+        )
+        session_id = record_a_meeting(service)
+        service.process(session_id)
+        assert called == []
 
 
 class TestPriorSummaries:

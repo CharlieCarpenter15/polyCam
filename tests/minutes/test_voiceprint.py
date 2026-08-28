@@ -274,6 +274,45 @@ class TestLabellingAMeeting:
         assert labels == {} and "switched off" in note
 
 
+class TestATranscriptWithoutTranscription:
+    """What the appliance produces when speech-to-text is switched off.
+
+    The setting promises that “none” still works out who spoke. A record of how
+    many people talked, for how long and in what order is genuinely useful, and
+    is what somebody turning transcription off on a slow Pi is asking for.
+    """
+
+    def test_speech_becomes_segments_with_no_words(self, two_voices):
+        segments = voiceprint.speech_segments(two_voices)
+        assert len(segments) == 2
+        assert all(segment.text == "" for segment in segments)
+        assert all(segment.track == TRACK_ROOM for segment in segments)
+        assert segments[0].start == pytest.approx(0.6, abs=0.2)
+        assert segments[1].duration == pytest.approx(5.0, abs=0.4)
+
+    def test_the_track_can_be_chosen(self, two_voices):
+        segments = voiceprint.speech_segments(two_voices, TRACK_FAR_END)
+        assert all(segment.track == TRACK_FAR_END for segment in segments)
+
+    def test_silence_produces_no_segments(self, tmp_path):
+        path = write_wav(tmp_path / "quiet.wav", silence(6))
+        assert voiceprint.speech_segments(path) == []
+
+    def test_a_missing_recording_is_not_an_error(self, tmp_path):
+        assert voiceprint.speech_segments(tmp_path / "nope.wav") == []
+
+    def test_such_a_transcript_reads_sensibly(self, two_voices):
+        from app.minutes.transcript import SessionMeta, Transcript
+
+        written = Transcript(
+            meta=SessionMeta(session_id="20260101-000000-abcdef12", title="Standup"),
+            segments=voiceprint.speech_segments(two_voices),
+        )
+        text = written.render_text()
+        assert "spoke for" in text
+        assert written.has_words is False, "there are no words to summarise"
+
+
 class TestClustering:
     def test_unnamed_speakers_are_kept_apart_and_numbered_from_two(self):
         a = [1.0, 0.0, 0.0]
