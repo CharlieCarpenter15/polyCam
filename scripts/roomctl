@@ -140,6 +140,38 @@ cmd_panel() {
   fi
 }
 
+# port_listener PORT — describe what is listening on a TCP port, or fail.
+#
+# Layered on purpose: `ss` is present on Raspberry Pi OS and names the process,
+# but this has to keep working on a stripped-down image, so it falls back to
+# lsof and finally to /proc/net/tcp, which needs no tools at all.
+port_listener() {
+  local port="$1" out hex
+
+  if command -v ss >/dev/null 2>&1; then
+    out="$(ss -tlnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" || true)"
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    out="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 || true)"
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+  fi
+
+  # /proc/net/tcp: field 2 is <hex ip>:<hex port>, field 4 is the state
+  # (0A = LISTEN). Checking the state avoids matching an outbound connection
+  # that merely happens to use this port at the far end.
+  hex="$(printf '%04X' "$port")"
+  if awk -v hex="$hex" '$2 ~ ":"hex"$" && $4 == "0A" { found = 1 }
+                        END { exit !found }' \
+       /proc/net/tcp /proc/net/tcp6 2>/dev/null; then
+    printf 'a process is listening on port %s (install iproute2 to see which)\n' "$port"
+    return 0
+  fi
+
+  return 1
+}
+
 cmd_screen() {
   # Answers one question: is the TV blank because the page did not load, or
   # because Chromium loaded it and failed to draw it? Those need different
@@ -167,9 +199,33 @@ cmd_screen() {
   else
     printf '  backend     : \033[31mNOT answering\033[0m on port %s\n' "$dash_port"
     printf '\n'
-    dim "The room software is down, so there is no page to show."
-    dim "  roomctl restart backend"
-    dim "  roomctl logs backend"
+
+    # Distinguish two very different failures: nothing is listening (the room
+    # software is down) versus something else is listening (a port clash, which
+    # makes the room restart-loop forever with no obvious cause).
+    local holder=""
+    holder="$(port_listener "$dash_port" || true)"
+
+    if [ -n "$holder" ]; then
+      bold "Something else is using port ${dash_port}."
+      printf '    %s\n\n' "$(printf '%s' "$holder" | tr -s ' ')"
+      dim "That is why the room software cannot start — it restarts, fails to"
+      dim "bind, and tries again. Either stop whatever owns the port, or move"
+      dim "the room to a different one:"
+      printf '\n'
+      dim "  sudo ss -tlnp | grep :${dash_port}      # see it with the process name"
+      dim "  roomctl set DASHBOARD_PORT 8090"
+      dim "  roomctl restart backend"
+      printf '\n'
+      dim "If it is a second copy of this appliance, that is the likely culprit:"
+      dim "  pgrep -af 'app.main'"
+    else
+      bold "Nothing is listening on port ${dash_port}."
+      dim "The room software is not running. Its own log will say why:"
+      printf '\n'
+      dim "  roomctl logs backend"
+      dim "  roomctl restart backend"
+    fi
     return 1
   fi
 

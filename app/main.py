@@ -13,6 +13,7 @@ on a Raspberry Pi straightforward: one unit, one log, one place to look.
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import os
 import signal
@@ -845,7 +846,31 @@ def main(argv: list[str] | None = None) -> int:
         lan_admin=config.bool_("ADMIN_LAN_ACCESS"),
     )
     # threaded=True: the dashboard polls while background threads work.
-    app.run(host=host, port=port, threaded=True, use_reloader=False, debug=False)
+    try:
+        app.run(host=host, port=port, threaded=True, use_reloader=False, debug=False)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            # systemd will restart us, which is right if the port frees up. But
+            # without this line the journal shows only a traceback and the room
+            # restart-loops with no indication of why.
+            log_event(
+                log,
+                logging.CRITICAL,
+                "web.port_already_in_use",
+                port=port,
+                host=host,
+                hint=f"something else holds port {port}: run "
+                f"'sudo ss -tlnp | grep :{port}' to find it, or change the port "
+                f"with 'roomctl set DASHBOARD_PORT 8090'",
+            )
+            return 2
+        if exc.errno == errno.EADDRNOTAVAIL:
+            log_event(
+                log, logging.CRITICAL, "web.address_unavailable",
+                host=host, hint="DASHBOARD_HOST is not an address on this machine",
+            )
+            return 2
+        raise
     return 0
 
 

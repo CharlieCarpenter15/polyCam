@@ -557,6 +557,35 @@ returns the real value. To set a new one:
 ./scripts/roomctl pin 246813
 ```
 
+### "backend NOT answering on port 8080"
+
+```bash
+./scripts/roomctl screen
+```
+
+It now tells the two causes apart, because they need opposite fixes:
+
+**"Nothing is listening"** — the room software is not running. Its own log says
+why:
+
+```bash
+./scripts/roomctl logs backend | tail -40
+```
+
+**"Something else is using port 8080"** — a port clash. The room restarts,
+fails to bind, and tries again forever. Either stop whatever owns the port or
+move the room:
+
+```bash
+sudo ss -tlnp | grep :8080     # what owns it
+pgrep -af app.main             # is it a second copy of this appliance?
+./scripts/roomctl set DASHBOARD_PORT 8090
+./scripts/roomctl restart backend
+```
+
+A stray `./scripts/dev-run.sh` left running is the usual culprit. The journal
+also names this directly now — look for `web.port_already_in_use`.
+
 ### The dashboard shows "No calendar connected yet"
 
 The calendar link is missing or wrong. Settings → Calendar. To test the link:
