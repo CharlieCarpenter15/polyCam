@@ -232,11 +232,17 @@ systemctl --user stop room-kiosk
 **2. Open Chromium using the room's own profile**
 
 ```bash
-chromium-browser --user-data-dir="$HOME/room-appliance/var/chromium-profile" &
+chromium-browser --user-data-dir="$HOME/room-appliance/var/chromium-profile" \
+                 --password-store=basic &
 ```
 
 (Adjust the path if you cloned somewhere else. Use `chromium` instead of
 `chromium-browser` on releases where that is the name.)
+
+`--password-store=basic` matters: without it Chromium tries to use the desktop
+keyring and pops an *"Enter password to unlock your login keyring"* dialog,
+which is confusing and has nothing to do with the room accounts. The kiosk
+already passes this flag; the manual launch needs it too.
 
 **3. Sign in to what the room needs**
 
