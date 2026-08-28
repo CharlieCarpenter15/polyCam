@@ -480,6 +480,11 @@
       .then(function (data) {
         openSessionId = sessionId;
         if (data.people) { people = data.people; }
+        // A plain link to a server route, so the browser saves the file itself
+        // and the transcript never has to exist twice in the page.
+        var base = "/api/minutes/sessions/" + encodeURIComponent(sessionId) + "/download";
+        $("detail-download").setAttribute("href", base);
+        $("detail-download-transcript").setAttribute("href", base + "?part=transcript");
         renderSession(data.session);
         show($("sessions-block"), false);
         show($("session-detail"), true);

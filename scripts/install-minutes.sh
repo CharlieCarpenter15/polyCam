@@ -93,6 +93,13 @@ REQUIREMENTS="$ROOT/requirements-minutes.txt"
 BUILD_LOG="$VAR_DIR/whisper-build.log"
 PIP="$VENV/bin/pip"
 
+# Every question about this machine is put to the appliance's own Python, so
+# that --venv steers the hardware probe as well as the packages. lib-room.sh
+# falls back to the system python3 when there is no virtual environment yet.
+if [ -x "$VENV/bin/python3" ]; then
+  ROOM_PYTHON="$VENV/bin/python3"
+fi
+
 # app/minutes/paths.py creates every directory under var/minutes mode 0700 and
 # writes every file mode 0600, because a recording holds people's voices. The
 # models are not private, but they live in that tree, so they follow its rules.

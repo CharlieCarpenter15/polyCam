@@ -127,8 +127,9 @@ class ChromeDevTools:
         self._ws: Any = None
         self._ws_url: str = ""
         self._next_id = 0
-        #: The page URL the last command was sent to. It is what tells the
-        #: frame cache below that the page has moved on — see :meth:`frames`.
+        #: The page URL the last command was actually sent to. The frame cache
+        #: is filed under it, so that a page which navigates while its own
+        #: frame tree is being read is not cached under the address it left.
         self._target_url: str = ""
         #: The page's frames and one isolated world per frame, both cached
         #: until that URL changes. ``None`` means "not looked yet"; an empty
@@ -370,27 +371,32 @@ class ChromeDevTools:
         the frames themselves change perhaps twice an hour, so doing this per
         poll would be paying over and over for the same answer.
 
-        Navigation is noticed by watching the URL every command already looks
-        up, rather than by subscribing to ``Page.frameNavigated``: :meth:`send`
-        throws away every frame that is not the reply it is waiting for, so
-        this client cannot hear an event even if it asked for one.
+        Navigation is noticed by watching the page's URL, rather than by
+        subscribing to ``Page.frameNavigated``: :meth:`send` throws away every
+        frame that is not the reply it is waiting for, so this client cannot
+        hear an event even if it asked for one. Reading the URL costs one HTTP
+        request to the debugging port, which is what every DevTools command
+        already costs; handing back frame ids for a page that has gone would
+        cost the room the meeting.
 
         Returns ``[]`` when the browser will not say — an older Chromium, a
         page that has gone. Callers then stay on the top frame, which is
         exactly what this client did before any of this existed.
         """
+        url = self.current_url()
         with self._lock:
             cached = self._frames
-            if cached is not None and self._frames_url == self._target_url:
+            if cached is not None and self._frames_url == url:
                 return list(cached)
 
         found = self._read_frame_tree(timeout=timeout)
         with self._lock:
             self._frames = found
-            # Keyed on the URL the read itself saw: ``_connect`` refreshes it
-            # on the way past, so a page that moved on mid-read is caught by
-            # the next call rather than being cached under the old address.
-            self._frames_url = self._target_url
+            # Keyed on the URL the read itself saw rather than the one checked
+            # a moment ago: ``_connect`` refreshes it on the way past, so a
+            # page that moved on mid-read is caught by the next call instead of
+            # being filed under an address it has already left.
+            self._frames_url = self._target_url or url
             self._worlds = {}
         if len(found) > 1:
             log_event(log, logging.DEBUG, "cdp.frames_found", frames=len(found))

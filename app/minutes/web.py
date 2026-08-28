@@ -51,6 +51,7 @@ from flask import (
     Blueprint,
     current_app,
     jsonify,
+    make_response,
     render_template,
     request,
     send_file,
@@ -539,6 +540,73 @@ def api_session(session_id: str):
     if data is None:
         return fail("No such recording.", 404)
     return ok(session=data, people=_public_people(service))
+
+
+@minutes_bp.route("/api/minutes/sessions/<session_id>/download")
+@require_admin
+@needs_minutes
+def api_session_download(session_id: str):
+    """The whole write-up as a text file, for keeping or pasting elsewhere.
+
+    Until now a meeting could be read on this page and not taken off it, which
+    made the page the only copy — a poor place for the record of a meeting to
+    live on an appliance whose retention policy deletes it after a month.
+
+    ``?part=transcript`` or ``?part=summary`` narrows it. The filename is
+    generated from the session id and never from the meeting title: a title is
+    whatever somebody typed into a calendar, and it is not going anywhere near
+    a Content-Disposition header.
+    """
+    detail = _service().get_session(session_id)
+    if detail is None:
+        return fail("No such recording.", 404)
+
+    part = (request.args.get("part") or "all").strip().lower()
+    if part not in ("all", "transcript", "summary"):
+        part = "all"
+
+    meta = detail.get("meta") or {}
+    summary = (detail.get("summary") or {}).get("text") or ""
+    body = _render_download(detail, meta, summary, part)
+
+    response = make_response(body)
+    response.headers["Content-Type"] = "text/plain; charset=utf-8"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="meeting-{session_id}-{part}.txt"'
+    )
+    # It is a transcript of a private meeting; it does not belong in a cache.
+    response.headers["Cache-Control"] = "no-store"
+    log_event(log, logging.INFO, "minutes.downloaded", session=session_id, part=part)
+    return response
+
+
+def _render_download(detail: dict, meta: dict, summary: str, part: str) -> str:
+    """The text file itself: facts, then the summary, then the transcript."""
+    if part == "transcript":
+        return detail.get("text") or "There is no transcript for this meeting.\n"
+    if part == "summary":
+        return summary or "There is no summary for this meeting.\n"
+
+    people = [
+        p.get("name", "")
+        for p in ((detail.get("transcript") or {}).get("participants") or [])
+    ]
+    lines = [
+        _text(meta.get("title"), 200) or "Meeting",
+        f"{_text(meta.get('room'), 120)} · {_text(meta.get('started_at'), 40)}".strip(" ·"),
+    ]
+    if people:
+        lines.append("Present: " + ", ".join(name for name in people if name))
+    lines.append("")
+    if summary:
+        lines += ["SUMMARY", "", summary, "", ""]
+    lines += ["TRANSCRIPT", "", detail.get("text") or "(nothing was transcribed)"]
+    lines.append("")
+    lines.append(
+        "Recorded and written up automatically. Speaker labels are the "
+        "appliance's best guess and may be wrong."
+    )
+    return "\n".join(lines) + "\n"
 
 
 @minutes_bp.route("/api/minutes/sessions/<session_id>", methods=["DELETE"])

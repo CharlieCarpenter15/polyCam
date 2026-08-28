@@ -194,6 +194,82 @@ class TestTheApplianceHealth:
         assert report["minutes"]["sessions"] == 0
 
 
+class TestItCannotRebootThePi:
+    """The most consequential coupling in this feature, and the least obvious.
+
+    ``scripts/watchdog.sh`` polls ``/api/health`` with ``curl --fail``. That
+    endpoint answers 503 when the overall status is "error". A 503 makes the
+    watchdog restart the dashboard, and after enough consecutive failures it
+    reboots the Raspberry Pi.
+
+    So the cap that keeps this feature at "warning" is not tidiness — it is the
+    only thing standing between a transcript that will not summarise and a room
+    that reboots itself in the middle of the working day. These tests exist so
+    that nobody removes it without finding out.
+    """
+
+    def _app(self, config, minutes):
+        from app.main import create_app
+
+        application = create_app(config, start_services=False)
+        application.config["ROOM_APPLIANCE"].minutes = minutes
+        application.config["ROOM_APPLIANCE"].health.minutes = minutes
+        return application.test_client()
+
+    def test_a_broken_feature_does_not_make_health_answer_503(
+        self, room_dirs, config, service
+    ):
+        config.update(
+            {
+                "DEV_MODE": True,
+                "CALENDAR_SOURCE": "mock",
+                "KIOSK_ENABLED": False,
+                "MINUTES_ENABLED": True,
+                "MINUTES_SUMMARY_ENABLED": True,
+                "MINUTES_EMAIL_ENABLED": True,
+                "MINUTES_IDENTIFY_FACES": True,
+                "MINUTES_IDENTIFY_VOICES": True,
+            }
+        )
+        write_session(session_id_days_ago(0), stage="failed", error="everything broke")
+
+        response = self._app(config, service).get("/api/health")
+        payload = response.get_json()
+        assert payload["components"]["minutes"] == WARN
+        assert response.status_code != 503, (
+            "a failing transcript feature would restart the dashboard and, "
+            "eventually, reboot the Pi"
+        )
+
+    def test_a_feature_that_throws_does_not_make_health_answer_503(
+        self, room_dirs, config
+    ):
+        class Exploding:
+            def health(self):
+                raise RuntimeError("everything is on fire")
+
+        config.update(
+            {"DEV_MODE": True, "CALENDAR_SOURCE": "mock", "KIOSK_ENABLED": False}
+        )
+        response = self._app(config, Exploding()).get("/api/health")
+        assert response.status_code != 503
+
+    def test_the_feature_never_returns_the_status_that_would_do_it(self, service):
+        """Belt and braces: whatever is wrong, it may not say "error"."""
+        service.config.update(
+            {
+                "MINUTES_ENABLED": True,
+                "MINUTES_SUMMARY_ENABLED": True,
+                "MINUTES_EMAIL_ENABLED": True,
+                "MINUTES_IDENTIFY_FACES": True,
+                "MINUTES_IDENTIFY_VOICES": True,
+            }
+        )
+        for days in range(3):
+            write_session(session_id_days_ago(days), stage="failed", error="broken")
+        assert service.health()["status"] in (OK, WARN, OFF)
+
+
 class TestDiskArithmetic:
     """The bug that made a healthy disk look full."""
 

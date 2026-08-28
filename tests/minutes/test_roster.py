@@ -32,6 +32,7 @@ from app.minutes.roster import (
     build_drain_script,
     build_install_script,
     build_probe_script,
+    build_roster_panel_script,
 )
 from app.minutes.transcript import SOURCE_ROSTER, TRACK_FAR_END
 
@@ -53,6 +54,8 @@ def script_kind(script: str) -> str:
         return "install"
     if "var FLUSH =" in script:
         return "drain"
+    if "var PANEL_SELECTORS = " in script:
+        return "panel"
     return "click"
 
 
@@ -64,15 +67,29 @@ class FakeBrowser:
     the sampler is still running.
     """
 
-    def __init__(self, drains=(), *, install=True, clicked="Turn on live captions"):
+    def __init__(
+        self,
+        drains=(),
+        *,
+        install=True,
+        clicked="Turn on live captions",
+        panel=None,
+    ):
         self.drains = list(drains)
         self.install = install
         self.clicked = clicked
+        #: What the participant-panel pass finds. The default is a meeting with
+        #: the panel shut and a control to open it.
+        self.panel = (
+            {"open": False, "clicked": "people", "source": "", "candidates": 9}
+            if panel is None
+            else panel
+        )
         self.scripts: list[str] = []
-        #: Whether each call claimed a user gesture. Only the captions control
-        #: should: the page gates it behind a real interaction, and a reader
-        #: that claimed one every couple of seconds would keep the page
-        #: permanently convinced somebody was using it.
+        #: Whether each call claimed a user gesture. Only the two controls the
+        #: feature may press should: the page gates them behind a real
+        #: interaction, and a reader that claimed one every couple of seconds
+        #: would keep the page permanently convinced somebody was using it.
         self.gestures: list[bool] = []
         self.kinds: list[str] = []
 
@@ -85,10 +102,31 @@ class FakeBrowser:
             return {"ok": True, "state": "installed"} if self.install else None
         if kind == "click":
             return {"clicked": self.clicked, "filled_name": False, "waiting": ""}
+        if kind == "panel":
+            return self.panel
         if not self.drains:
             return None
         entry = self.drains.pop(0)
         return entry() if callable(entry) else entry
+
+    def script_of(self, kind: str) -> str:
+        """The first script of one kind, for asserting on what was sent."""
+        for script, seen in zip(self.scripts, self.kinds):
+            if seen == kind:
+                return script
+        return ""
+
+
+#: The two presses this feature is allowed to make. Everything else only reads.
+PRESSES = ("click", "panel")
+
+
+def panel_fields(events) -> dict:
+    """The structured fields of the one participant-panel event, or ``{}``."""
+    for name, fields in events.events:
+        if name == "minutes.roster_panel_requested":
+            return fields
+    return {}
 
 
 class CountingEvent(threading.Event):
@@ -244,7 +282,18 @@ class TestScripts:
         build_drain_script("run-token"),
         build_drain_script("run-token", flush=True),
     ]
-    ALL = OURS + [build_captions_script()]
+    #: The one script this module renders that presses something. Held to
+    #: every rule below except "never clicks".
+    PANELS = [
+        build_roster_panel_script("teams"),
+        build_roster_panel_script("meet"),
+        build_roster_panel_script("zoom"),
+        build_roster_panel_script("webex"),
+    ]
+    #: ...and the join clicker, which is somebody else's prose as well as
+    #: somebody else's code, so it is only asked to parse.
+    ALL = OURS + PANELS + [build_captions_script()]
+    WRITTEN_HERE = OURS + PANELS
 
     @pytest.mark.parametrize("script", ALL, ids=range(len(ALL)))
     def test_the_generated_script_is_valid_javascript(self, script, tmp_path):
@@ -258,14 +307,18 @@ class TestScripts:
         )
         assert result.returncode == 0, result.stderr
 
-    @pytest.mark.parametrize("script", OURS, ids=range(len(OURS)))
+    @pytest.mark.parametrize(
+        "script", WRITTEN_HERE, ids=range(len(WRITTEN_HERE))
+    )
     def test_the_script_is_es5(self, script):
         """It runs in whatever Chromium the Pi happens to have."""
         assert "=>" not in script
         assert "`" not in script
         assert not any(f" {word} " in script for word in ("let", "const"))
 
-    @pytest.mark.parametrize("script", OURS, ids=range(len(OURS)))
+    @pytest.mark.parametrize(
+        "script", WRITTEN_HERE, ids=range(len(WRITTEN_HERE))
+    )
     def test_no_stray_debugging_is_shipped_into_a_meeting(self, script):
         assert "console.log" not in script
         assert "debugger" not in script
@@ -309,6 +362,41 @@ class TestScripts:
         assert "turn off" in avoid
         wanted = embedded(build_captions_script(), "WANTED")
         assert "Turn on live captions" in wanted
+
+    @pytest.mark.parametrize(
+        "provider,word",
+        [("teams", "People"), ("meet", "Show everyone"), ("zoom", "Participants")],
+    )
+    def test_each_provider_hunts_its_own_control(self, provider, word):
+        assert word in embedded(build_roster_panel_script(provider), "PANEL_WANTED")
+
+    def test_an_unknown_provider_tries_all_three(self):
+        wanted = embedded(build_roster_panel_script("webex"), "PANEL_WANTED")
+        for word in ("People", "Show everyone", "Participants"):
+            assert word in wanted
+        selectors = embedded(build_roster_panel_script("webex"), "PANEL_SELECTORS")
+        assert '[data-tid="roster"]' in selectors
+        assert "#participants-ul" in selectors
+
+    def test_the_panel_pass_can_only_ever_open_it(self):
+        """A room that shut a panel somebody opened would be taking it away."""
+        avoid = embedded(build_roster_panel_script("teams"), "PANEL_AVOID")
+        for term in ("hide", "close", "collapse"):
+            assert term in avoid
+
+    def test_the_panel_pass_will_not_press_anything_that_leaves(self):
+        avoid = embedded(build_roster_panel_script("teams"), "PANEL_AVOID")
+        for term in ("leave", "end call", "hang up"):
+            assert term in avoid
+
+    def test_the_panel_selectors_cannot_match_the_button_itself(self):
+        """Mistaking the control for the panel means never pressing it."""
+        for provider in ("teams", "meet", "zoom", "webex"):
+            for selector in embedded(
+                build_roster_panel_script(provider), "PANEL_SELECTORS"
+            ):
+                assert selector != '[aria-label*="Participants"]'
+                assert "button" not in selector
 
 
 # ---------------------------------------------------------------------------
@@ -882,22 +970,26 @@ class TestTurningCaptionsOn:
         assert browser.kinds[0] == "click", "captions go on before the watching starts"
         assert "minutes.roster_captions_requested" in events.names()
 
-    def test_only_the_press_claims_a_user_gesture(self, reading, tmp_path):
+    def test_only_the_presses_claim_a_user_gesture(self, reading, tmp_path):
         """A reader must not keep telling the page that somebody is using it.
 
-        The captions control is gated behind a real interaction, so pressing it
-        has to claim one. Every other pass only reads, and claiming a gesture
-        every couple of seconds would leave the page permanently convinced
-        there was a person at the keyboard.
+        Both controls the feature may touch — live captions, and the
+        participant list — are gated behind a real interaction, so pressing
+        either has to claim one. Every other pass only reads, and claiming a
+        gesture every couple of seconds would leave the page permanently
+        convinced there was a person at the keyboard.
         """
-        reading.update({"MINUTES_TURN_ON_CAPTIONS": True})
+        reading.update(
+            {"MINUTES_TURN_ON_CAPTIONS": True, "MINUTES_OPEN_ROSTER": True}
+        )
         browser = FakeBrowser(drains=[drain_payload() for _ in range(4)])
         run_sampler(reading, browser, tmp_path, stop_after=4).stop()
 
         by_kind = list(zip(browser.kinds, browser.gestures))
         assert ("click", True) in by_kind, by_kind
+        assert ("panel", True) in by_kind, by_kind
         assert not any(
-            gesture for kind, gesture in by_kind if kind != "click"
+            gesture for kind, gesture in by_kind if kind not in PRESSES
         ), "a reading pass claimed a user gesture"
 
     def test_a_reading_only_meeting_never_claims_a_gesture(self, reading, tmp_path):
@@ -910,6 +1002,104 @@ class TestTurningCaptionsOn:
         browser = FakeBrowser(drains=[drain_payload(), None], clicked=None)
         run_sampler(reading, browser, tmp_path).stop()
         assert browser.kinds.count("drain") >= 1
+
+
+class TestOpeningTheParticipantList:
+    """``MINUTES_OPEN_ROSTER``: some tenants name nobody until it is open."""
+
+    def test_off_by_default_nothing_is_pressed(self, reading, tmp_path):
+        assert reading.bool_("MINUTES_OPEN_ROSTER") is False
+        browser = FakeBrowser(drains=[drain_payload(), None])
+        run_sampler(reading, browser, tmp_path).stop()
+        assert "panel" not in browser.kinds
+        assert not any(browser.gestures)
+
+    def test_on_it_is_tried_exactly_once(self, reading, tmp_path, events):
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(drains=[drain_payload() for _ in range(5)])
+        run_sampler(reading, browser, tmp_path, stop_after=5).stop()
+        assert browser.kinds.count("panel") == 1, browser.kinds
+        assert browser.kinds[0] == "panel", "the panel opens before the watching"
+        assert panel_fields(events)["pressed"] is True
+
+    def test_the_press_claims_a_user_gesture(self, reading, tmp_path):
+        """The page gates the control behind a real interaction."""
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(drains=[drain_payload(), None])
+        run_sampler(reading, browser, tmp_path).stop()
+        assert ("panel", True) in list(zip(browser.kinds, browser.gestures))
+        assert not any(
+            gesture for kind, gesture in zip(browser.kinds, browser.gestures)
+            if kind != "panel"
+        )
+
+    def test_a_panel_already_open_is_left_exactly_as_it_is(
+        self, reading, tmp_path, events
+    ):
+        """Pressing the control now would take away a panel somebody opened."""
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(
+            drains=[drain_payload(), None],
+            panel={"open": True, "clicked": None, "source": '[data-tid="roster"]'},
+        )
+        run_sampler(reading, browser, tmp_path).stop()
+        assert browser.kinds.count("panel") == 1, "it looked, once"
+        fields = panel_fields(events)
+        assert fields["already_open"] is True
+        assert fields["pressed"] is False
+
+    def test_a_control_that_is_not_there_is_not_an_error(
+        self, reading, tmp_path, events
+    ):
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(
+            drains=[drain_payload(), None],
+            panel={"open": False, "clicked": None, "candidates": 40},
+        )
+        run_sampler(reading, browser, tmp_path).stop()
+        assert browser.kinds.count("drain") >= 1, "the watching carried on"
+        fields = panel_fields(events)
+        assert fields["pressed"] is False
+        assert fields["already_open"] is False
+
+    def test_a_page_that_answers_nothing_at_all_is_not_an_error(
+        self, reading, tmp_path, events
+    ):
+        """``read_meeting_page`` returns None for every failure there is."""
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(drains=[drain_payload(), None], panel=None)
+        browser.panel = None
+        run_sampler(reading, browser, tmp_path).stop()
+        assert panel_fields(events)["pressed"] is False
+
+    def test_the_hunt_is_built_for_the_meeting_being_recorded(
+        self, reading, tmp_path
+    ):
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(drains=[drain_payload(), None])
+        run_sampler(reading, browser, tmp_path, provider="meet").stop()
+        assert "Show everyone" in browser.script_of("panel")
+
+    def test_no_names_are_logged_by_the_press(self, reading, tmp_path, events):
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(
+            drains=[drain_payload(), None],
+            panel={"open": False, "clicked": "people (2) priya nair"},
+        )
+        run_sampler(reading, browser, tmp_path).stop()
+        assert "Priya" not in json.dumps(events.events, default=str)
+
+    def test_both_switches_on_is_two_presses_and_no_more(
+        self, reading, tmp_path
+    ):
+        reading.update(
+            {"MINUTES_TURN_ON_CAPTIONS": True, "MINUTES_OPEN_ROSTER": True}
+        )
+        browser = FakeBrowser(drains=[drain_payload() for _ in range(5)])
+        run_sampler(reading, browser, tmp_path, stop_after=5).stop()
+        assert browser.kinds.count("click") == 1
+        assert browser.kinds.count("panel") == 1
+        assert browser.kinds[:2] == ["click", "panel"]
 
 
 # ---------------------------------------------------------------------------

@@ -995,3 +995,94 @@ class TestTryIt:
         response = post(client, "/api/minutes/look", token)
         assert response.status_code == 409
         assert response.get_json()["error"] == "No camera was found."
+
+
+class TestTakingAMeetingOffTheAppliance:
+    """A meeting you can read but not keep is a meeting you will lose.
+
+    The appliance deletes its own copy when the retention period is up, so the
+    page has to be able to hand the write-up over rather than being the only
+    place it exists.
+    """
+
+    def test_the_whole_write_up_downloads_as_text(self, client, minutes_paths):
+        session_id = make_session(minutes_paths)
+        response = client.get(f"/api/minutes/sessions/{session_id}/download")
+
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("text/plain")
+        assert "attachment" in response.headers["Content-Disposition"]
+        body = response.data.decode()
+        assert "SUMMARY" in body and "TRANSCRIPT" in body
+        assert "best guess and may be wrong" in body, "say the labels are guesses"
+
+    def test_the_transcript_alone_downloads_cleanly(self, client, minutes_paths):
+        session_id = make_session(minutes_paths)
+        body = client.get(
+            f"/api/minutes/sessions/{session_id}/download?part=transcript"
+        ).data.decode()
+        assert "SUMMARY" not in body
+        assert "[" in body, "the transcript's own timestamps survive"
+
+    def test_the_summary_alone_downloads(self, client, minutes_paths):
+        session_id = make_session(minutes_paths)
+        body = client.get(
+            f"/api/minutes/sessions/{session_id}/download?part=summary"
+        ).data.decode()
+        assert "TRANSCRIPT" not in body
+
+    def test_an_unknown_part_falls_back_to_everything(self, client, minutes_paths):
+        session_id = make_session(minutes_paths)
+        body = client.get(
+            f"/api/minutes/sessions/{session_id}/download?part=../../etc/passwd"
+        ).data.decode()
+        assert "TRANSCRIPT" in body
+
+    def test_the_filename_comes_from_the_id_and_never_the_title(
+        self, client, minutes_paths
+    ):
+        """A meeting title is whatever somebody typed into a calendar, and it
+        is not going anywhere near a Content-Disposition header."""
+        from app.store import read_json, write_json
+
+        session_id = make_session(minutes_paths)
+        directory = minutes_paths.session_dir(session_id)
+        meta = read_json(directory / "meta.json", default={})
+        meta["title"] = 'Review "; rm -rf /\nX-Injected: yes'
+        write_json(directory / "meta.json", meta)
+
+        response = client.get(f"/api/minutes/sessions/{session_id}/download")
+        disposition = response.headers["Content-Disposition"]
+        assert session_id in disposition
+        assert "rm -rf" not in disposition
+        assert "\n" not in disposition
+        assert "X-Injected" not in str(dict(response.headers))
+        # The title itself is still in the body, where it belongs.
+        assert "rm -rf" in response.data.decode()
+
+    def test_an_unknown_meeting_is_not_found(self, client):
+        assert client.get(
+            "/api/minutes/sessions/20200101-000000-deadbeef/download"
+        ).status_code == 404
+
+    def test_a_malformed_id_is_not_found(self, client):
+        assert client.get(
+            "/api/minutes/sessions/..%2F..%2Fetc/download"
+        ).status_code in (400, 404)
+
+    def test_it_is_not_cached(self, client, minutes_paths):
+        session_id = make_session(minutes_paths)
+        response = client.get(f"/api/minutes/sessions/{session_id}/download")
+        assert "no-store" in response.headers.get("Cache-Control", "")
+
+    def test_the_lan_cannot_read_a_transcript_without_signing_in(
+        self, client, minutes_paths
+    ):
+        """The dashboard is deliberately readable from the LAN. This is not."""
+        session_id = make_session(minutes_paths)
+        response = client.get(
+            f"/api/minutes/sessions/{session_id}/download",
+            environ_overrides={"REMOTE_ADDR": "192.168.1.50"},
+        )
+        assert response.status_code == 401
+        assert b"agreed" not in response.data

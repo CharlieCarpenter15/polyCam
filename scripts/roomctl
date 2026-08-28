@@ -1197,6 +1197,8 @@ def from_stdin():
 
 def print_status(data, live):
     stats = data.get("people") or {}
+    if live:
+        field("feature", "on — this room records its meetings and writes them up")
     field("meetings", f"{data.get('sessions', 0)} on this appliance")
     field(
         "people",
