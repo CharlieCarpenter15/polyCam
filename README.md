@@ -573,10 +573,15 @@ It will report **"wrong program on port 8080"** and name the process. Then
 either stop that program, or move the room out of its way:
 
 ```bash
-sudo ss -tlnp | grep :8080                  # what owns the port
-./scripts/roomctl set DASHBOARD_PORT 8090
-./scripts/roomctl restart all
+sudo ss -tlnp | grep :8080     # what owns the port
+./scripts/roomctl port auto     # move the room out of its way
 ```
+
+`port auto` finds a free port, pins it, and restarts the dashboard **and** the
+TV display (the kiosk builds its URL from the port, so it has to restart too).
+It deliberately picks from a short fixed list rather than a random high port:
+the control-panel address is something people bookmark on a phone, so it needs
+to stay put between reboots.
 
 ### "backend NOT answering on port 8080"
 
@@ -1145,6 +1150,8 @@ A test fails if you forget.
 ./scripts/roomctl status              how is the room?
 ./scripts/roomctl screen              why is the TV blank / white / wrong?
 ./scripts/roomctl slow-device on      retune for a Pi 3 / older hardware
+./scripts/roomctl port                show the dashboard port
+./scripts/roomctl port auto           move to a free port (or: port 9123)
 ./scripts/roomctl doctor              full hardware check
 ./scripts/roomctl panel               the control-panel address and PIN status
 

@@ -305,6 +305,8 @@ DAILY_RESTART_TIME: ''
 # System & access
 #   Ports, logging and administrative access.
 # ----------------------------------------------------------------------
+# Change this if another program already uses the port. The TV and the
+# control-panel address both follow it.
 DASHBOARD_PORT: 8080
 
 # 127.0.0.1 keeps the dashboard on the Pi itself. Use the LAN admin switch

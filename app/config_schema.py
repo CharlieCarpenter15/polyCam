@@ -850,7 +850,12 @@ FIELDS: tuple[Field, ...] = (
         maximum=65535,
         group="system",
         label="Dashboard port",
-        restart_units=("room-dashboard.service",),
+        help="Change this if another program already uses the port. The TV and "
+        "the control-panel address both follow it.",
+        # The kiosk builds the dashboard URL from this at launch, so it needs
+        # restarting too — otherwise Chromium keeps loading the old port and
+        # the TV goes blank.
+        restart_units=("room-dashboard.service", "room-kiosk.service"),
     ),
     Field(
         key="DASHBOARD_HOST",

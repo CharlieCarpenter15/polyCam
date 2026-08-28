@@ -132,7 +132,7 @@ needs only a calendar link.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `DASHBOARD_PORT` | `8080` | Dashboard port. (min 1, max 65535) Restarts: room-dashboard. |
+| `DASHBOARD_PORT` | `8080` | Dashboard port. Change this if another program already uses the port. The TV and the control-panel address both follow it. (min 1, max 65535) Restarts: room-dashboard, room-kiosk. |
 | `DASHBOARD_HOST` | `127.0.0.1` | Listen address. 127.0.0.1 keeps the dashboard on the Pi itself. Use the LAN admin switch below rather than editing this by hand. _Advanced._ Restarts: room-dashboard. |
 | `ADMIN_LAN_ACCESS` | `false` | Allow settings from other computers on the network. Lets you open the Settings page from a laptop instead of plugging a keyboard into the Pi. Requires an admin PIN. Restarts: room-dashboard. |
 | `ADMIN_PIN` | empty | Admin PIN. Digits only. Required before network access to the Settings page can be switched on. **Secret — never logged.** |
