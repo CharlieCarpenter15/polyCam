@@ -1,0 +1,329 @@
+# Example configuration for the meeting-room appliance.
+#
+# GENERATED FILE — do not edit. Run scripts/gen-config-docs.py to refresh.
+#
+# You do not normally need this file: scripts/install.sh writes a real
+# config/config.yaml for you, and everything in it can be changed from the
+# Settings page in a browser. It is here so you can see every option and
+# its default in one place.
+#
+# To use it as a starting point:
+#     cp config/config.example.yaml config/config.yaml
+#     chmod 600 config/config.yaml
+# ----------------------------------------------------------------------
+# Room
+#   What the room is called on screen.
+# ----------------------------------------------------------------------
+# Shown in large type at the top of the dashboard.
+ROOM_NAME: Meeting Room
+
+# Optional second line, e.g. a floor or capacity: “Level 3 · 8 seats”.
+ROOM_SUBTITLE: ''
+
+# IANA time zone name. Leave empty to use the Raspberry Pi's own time
+# zone.
+TIMEZONE: ''
+
+# Off shows 10:42 AM, on shows 10:42.
+TIME_FORMAT_24H: false
+
+# ----------------------------------------------------------------------
+# Calendar
+#   Where the room's meetings come from. An ICS/iCal feed is the
+#   quickest way to get going; Microsoft Graph and Google Calendar can
+#   be dropped in later without touching the rest of the appliance.
+# ----------------------------------------------------------------------
+# “ics” uses the ICS/iCal URL below. “mock” invents meetings so you can
+# test the screen without a real calendar. “none” disables the calendar
+# entirely.
+# options: ics, mock, none
+CALENDAR_SOURCE: ics
+
+# The room calendar's secret iCal address. Outlook: Calendar → Share →
+# Publish a calendar → ICS link. Google: Calendar settings → Secret
+# address in iCal format. A local file path also works.
+CALENDAR_ICS_URL: ''
+
+# How often the calendar is re-fetched. 30 seconds is a good default.
+CALENDAR_REFRESH_SECONDS: 30
+
+# How far into the future meetings are loaded.
+CALENDAR_LOOKAHEAD_HOURS: 24
+
+# How many meetings are listed under “Upcoming” (3–5 fits a TV nicely).
+CALENDAR_UPCOMING_COUNT: 4
+
+CALENDAR_TIMEOUT_SECONDS: 20
+
+# Turn off for privacy: the dashboard then shows “Busy” instead of the
+# subject.
+CALENDAR_SHOW_TITLES: true
+
+# All-day entries (out-of-office, holidays) do not mark the room busy.
+CALENDAR_IGNORE_ALL_DAY: true
+
+# Skip events the organiser has cancelled.
+CALENDAR_IGNORE_DECLINED: true
+
+# ----------------------------------------------------------------------
+# Meeting joining
+#   How the appliance behaves around meeting start and end times.
+# ----------------------------------------------------------------------
+# Navigate the TV to the meeting shortly before it starts.
+AUTO_OPEN_MEETING: true
+
+# 1 means the meeting page opens about one minute before the start time.
+AUTO_OPEN_MINUTES: 1.0
+
+# Best effort. Teams, Meet and Zoom change their web pages without notice,
+# so if this fails the big JOIN button on the dashboard always works.
+AUTO_CLICK_JOIN: true
+
+AUTO_JOIN_TIMEOUT_SECONDS: 90
+
+# Grace period after a meeting's scheduled end before the TV goes back to
+# the room screen.
+RETURN_HOME_MINUTES: 2.0
+
+# Safety net: the appliance never stays on a meeting page longer than
+# this, even if the calendar goes strange.
+MAX_MEETING_MINUTES: 240
+
+# One per line, matched case-insensitively against on-screen button text.
+# Update this list if a provider renames a button — no code change needed.
+JOIN_BUTTON_TEXTS:
+- Continue on this browser
+- Use the web app instead
+- Continue in this browser
+- Join now
+- Join meeting
+- Join call
+- Ask to join
+- Join anyway
+- Continue without audio or video
+- Dismiss
+
+# Name typed into “your name” boxes when the room joins as a guest. Leave
+# empty to use the room name.
+JOIN_DISPLAY_NAME: ''
+
+# Ask the meeting page to mute the room's microphone on entry.
+JOIN_MUTE_ON_ENTRY: false
+
+# ----------------------------------------------------------------------
+# AirPlay screen sharing
+#   Wireless screen sharing from a Mac, iPhone or iPad.
+# ----------------------------------------------------------------------
+AIRPLAY_ENABLED: true
+
+# What appears in Screen Mirroring on a Mac or iPhone. Leave empty to use
+# the room name.
+AIRPLAY_NAME: ''
+
+# Optional numeric PIN a guest must type to share their screen. Empty
+# means anyone on the network can share.
+AIRPLAY_PIN: ''
+
+# Appended to the uxplay command line for unusual setups.
+AIRPLAY_EXTRA_ARGS: ''
+
+# On: mirroring covers the meeting on the TV (the call keeps running).
+# Off: mirroring is refused during a meeting. Either way, sharing through
+# Teams or Meet is better, because remote participants can see it too.
+AIRPLAY_INTERRUPTS_MEETING: true
+
+# ----------------------------------------------------------------------
+# Poly conference bar
+#   The USB conference bar used as camera, microphone and speaker.
+# ----------------------------------------------------------------------
+# Detect the USB bar and make it the default camera, microphone and
+# speaker.
+POLY_ENABLED: true
+
+# “auto” picks the Poly bar automatically. Otherwise a PipeWire/PulseAudio
+# source name — the Diagnostics page lists them.
+MICROPHONE_DEVICE: auto
+
+# “auto” picks the Poly bar. Set to “hdmi” to play sound through the TV,
+# or paste an exact sink name.
+SPEAKER_DEVICE: auto
+
+# “auto” picks the Poly bar, or give a device path such as /dev/video0.
+CAMERA_DEVICE: auto
+
+# Case-insensitive words used to recognise the bar in lsusb / PipeWire
+# output. One per line. Add your model's name here if detection fails.
+POLY_USB_MATCH:
+- poly
+- plantronics
+- polycom
+- studio
+- hp inc
+
+# Applied to the conference bar when the appliance starts. 0 disables.
+POLY_STARTUP_VOLUME: 65
+
+POLY_CHECK_SECONDS: 20
+
+# ----------------------------------------------------------------------
+# Poly remote / controller
+#   Optional physical remote / controller buttons.
+# ----------------------------------------------------------------------
+# Turn on if you have a Poly remote or controller. Use Diagnostics →
+# Discover remote buttons to find the key names.
+POLY_REMOTE_ENABLED: false
+
+# “auto” watches every matching input device. Otherwise an
+# /dev/input/eventN path.
+POLY_REMOTE_DEVICE: auto
+
+# Joins the current or next meeting.
+POLY_ANSWER_KEY: KEY_ENTER
+
+# Leaves the meeting and returns to the dashboard.
+POLY_HANGUP_KEY: KEY_ESC
+
+# Toggles the microphone.
+POLY_MUTE_KEY: KEY_MUTE
+
+POLY_VOLUME_UP_KEY: KEY_VOLUMEUP
+
+POLY_VOLUME_DOWN_KEY: KEY_VOLUMEDOWN
+
+# Optional. Toggles the camera in the meeting where supported.
+POLY_CAMERA_KEY: ''
+
+# Forces the TV back to the room dashboard.
+POLY_HOME_KEY: KEY_HOME
+
+POLY_VOLUME_STEP: 5
+
+# ----------------------------------------------------------------------
+# Display & browser
+#   Chromium kiosk behaviour on the TV.
+# ----------------------------------------------------------------------
+# Turn off only when developing on a normal computer.
+KIOSK_ENABLED: true
+
+# “auto” searches for chromium-browser, chromium then google-chrome.
+CHROMIUM_BINARY: auto
+
+# Used by the appliance to drive the browser. Never exposed off the Pi.
+CHROMIUM_DEBUG_PORT: 9222
+
+CHROMIUM_EXTRA_ARGS: ''
+
+HIDE_CURSOR: true
+
+# Off keeps the dashboard visible at all times.
+SCREEN_BLANKING: false
+
+# options: dark, light
+THEME: dark
+
+# Hex colour used for the JOIN button and highlights.
+ACCENT_COLOR: '#3d8bfd'
+
+SHOW_SHARING_INSTRUCTIONS: true
+
+# The small camera / microphone / network dots along the bottom.
+SHOW_STATUS_INDICATORS: true
+
+# ----------------------------------------------------------------------
+# Background & slideshow
+#   The wallpaper behind the dashboard. Upload your own photos from the
+#   control panel and they rotate as a slideshow.
+# ----------------------------------------------------------------------
+# “theme” is the built-in gradient. “slideshow” rotates through the images
+# you upload in the control panel. “solid” is a single colour.
+# options: theme, slideshow, solid
+BACKGROUND_MODE: theme
+
+# How long each slideshow image stays on screen before it fades to the
+# next.
+BACKGROUND_SLIDESHOW_SECONDS: 45
+
+# Off plays them in filename order.
+BACKGROUND_SHUFFLE: true
+
+# Keeps the time and meeting text readable over a bright photo. Raise it
+# if the text is hard to read from across the room.
+BACKGROUND_DIM_PERCENT: 55
+
+# A little blur makes busy photos easier to read text over.
+BACKGROUND_BLUR_PIXELS: 0
+
+# Used when Background is set to “solid”.
+BACKGROUND_SOLID_COLOR: '#0b1220'
+
+# Turn off to freeze the slideshow contents.
+BACKGROUND_ALLOW_UPLOADS: true
+
+# ----------------------------------------------------------------------
+# Reliability & recovery
+#   Self-healing. Leave these alone unless you have a reason.
+# ----------------------------------------------------------------------
+HEALTH_CHECK_SECONDS: 15
+
+# One per line.
+NETWORK_CHECK_HOSTS:
+- 1.1.1.1
+- 8.8.8.8
+
+# If Chromium stops responding or drifts to an unexpected page, put it
+# back on the dashboard.
+AUTO_RECOVER_BROWSER: true
+
+# A tiny timer outside the app checks the appliance every minute and
+# restarts anything that has stopped answering.
+WATCHDOG_ENABLED: true
+
+# If the appliance cannot be revived by restarting services, reboot the
+# Pi. Rate-limited to once an hour.
+WATCHDOG_REBOOT_ENABLED: true
+
+# With a 1-minute watchdog, 10 means roughly ten minutes of being
+# completely unresponsive.
+WATCHDOG_REBOOT_AFTER_FAILURES: 10
+
+# Optional HH:MM (24-hour) at which the room software restarts itself
+# while nobody is around, e.g. 04:30. Empty disables it.
+DAILY_RESTART_TIME: ''
+
+# ----------------------------------------------------------------------
+# System & access
+#   Ports, logging and administrative access.
+# ----------------------------------------------------------------------
+DASHBOARD_PORT: 8080
+
+# 127.0.0.1 keeps the dashboard on the Pi itself. Use the LAN admin switch
+# below rather than editing this by hand.
+DASHBOARD_HOST: 127.0.0.1
+
+# Lets you open the Settings page from a laptop instead of plugging a
+# keyboard into the Pi. Requires an admin PIN.
+ADMIN_LAN_ACCESS: false
+
+# Digits only. Required before network access to the Settings page can be
+# switched on.
+ADMIN_PIN: ''
+
+# The simplified touch page at /panel used to join meetings, change the
+# background and restart things from a phone.
+PANEL_ENABLED: true
+
+# Displays the http://…:8080/panel address in the corner of the dashboard
+# so anyone can find it. Turn off once the room is set up.
+PANEL_SHOW_URL_ON_TV: true
+
+# DEBUG is noisy but useful while setting the room up.
+# options: DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL: INFO
+
+# “text” is easy to read in journalctl; “json” suits log collectors.
+# options: text, json
+LOG_FORMAT: text
+
+# Runs with mock hardware so the dashboard can be built on a laptop. Never
+# leave this on in a real room.
+DEV_MODE: false

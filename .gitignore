@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Runtime configuration & secrets (never commit)
+config/config.yaml
+config/config.yaml.bak
+config/runtime-state.json
+.env
+
+# Local data / logs / browser profile
+var/
+logs/
+*.log
+chromium-profile/
+
+# OS noise
+.DS_Store
+
+# Emitted by tests/js/emit_scripts.py
+tests/js/clicker_*.js
+tests/js/incall.js
+tests/js/node_modules/
+tests/js/package-lock.json

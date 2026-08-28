@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Not available · {{ room_name }}{% endblock %}
+{% block content %}
+  <section class="block">
+    <div class="block-body">
+      <h1 style="margin:0 0 8px;font-size:22px">The control panel is switched off</h1>
+      <p class="field-help">
+        Turn it back on in Settings &rarr; System &amp; access &rarr;
+        <em>Enable the phone control panel</em>.
+      </p>
+      <a class="btn btn-primary" href="{{ url_for('settings_page') }}"
+         style="margin-top:14px">Open Settings</a>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,374 @@
+#!/usr/bin/env bash
+#
+# roomctl — everything you might need to do to the room, from a terminal.
+#
+# The web control panel covers the same ground without a keyboard; this exists
+# for SSH, for first-time setup, and for when the dashboard itself is the thing
+# that is broken.
+#
+#   roomctl status                     how is the room?
+#   roomctl doctor                     run every hardware check
+#   roomctl restart [what]             browser | airplay | remote | backend | all
+#   roomctl start|stop [what]
+#   roomctl logs [unit] [-f]           recent logs, optionally follow
+#   roomctl config                     show every setting
+#   roomctl get KEY                    show one setting
+#   roomctl set KEY VALUE              change one setting
+#   roomctl calendar <ics-url>         set the room calendar
+#   roomctl pin <digits>               set the admin PIN
+#   roomctl lan-admin on|off           allow settings from the network
+#   roomctl panel                      print the control panel address
+#   roomctl reset                      settings back to defaults (keeps calendar)
+#   roomctl reboot
+#   roomctl enable|disable             the whole appliance on/off at boot
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib-room.sh
+. "$HERE/lib-room.sh"
+
+UNITS=(room-dashboard.service room-kiosk.service room-airplay.service
+       room-remote.service room-watchdog.timer)
+
+bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
+red()  { printf '\033[31m%s\033[0m\n' "$*"; }
+green(){ printf '\033[32m%s\033[0m\n' "$*"; }
+
+usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; }
+
+py() {
+  local python
+  python="$(room_python)" || { red "Python not found."; exit 1; }
+  (cd "$ROOM_ROOT" && "$python" "$@")
+}
+
+resolve_unit() {
+  case "$1" in
+    browser | kiosk | chromium | display | tv) printf 'room-kiosk.service' ;;
+    airplay | uxplay | sharing)                printf 'room-airplay.service' ;;
+    remote | controller)                       printf 'room-remote.service' ;;
+    backend | dashboard | app | software)      printf 'room-dashboard.service' ;;
+    watchdog)                                  printf 'room-watchdog.timer' ;;
+    *) return 1 ;;
+  esac
+}
+
+# ------------------------------------------------------------------ commands
+
+cmd_status() {
+  room_load_config || true
+  local port; port="$(room_config DASHBOARD_PORT 8080)"
+
+  bold "Services"
+  local unit state
+  for unit in "${UNITS[@]}"; do
+    state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
+    [ -n "$state" ] || state="not installed"
+    if [ "$state" = "active" ]; then
+      printf '  \033[32m●\033[0m %-26s %s\n' "$unit" "$state"
+    else
+      printf '  \033[31m●\033[0m %-26s %s\n' "$unit" "$state"
+    fi
+  done
+  printf '\n'
+
+  bold "Room"
+  local health_file="/tmp/roomctl-health.$$"
+  if command -v curl >/dev/null 2>&1 &&
+     curl --silent --fail --max-time 5 "http://127.0.0.1:${port}/api/health" \
+       --output "$health_file" 2>/dev/null; then
+    py - "$health_file" << 'PYEOF'
+import json
+import sys
+
+MARKS = {"ok": "\033[32m✓\033[0m", "warning": "\033[33m!\033[0m",
+         "error": "\033[31m✗\033[0m", "disabled": "\033[2m–\033[0m"}
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+
+print(f"  overall: {data.get('status')}    mode: {data.get('mode')}")
+for name, status in (data.get("components") or {}).items():
+    print(f"  {MARKS.get(status, '?')} {name}")
+
+backend = data.get("backend") or {}
+host = data.get("host") or {}
+print(f"\n  version {backend.get('version')}  "
+      f"backend up {round(backend.get('uptime_seconds', 0) / 60)} min  "
+      f"pi up {round(host.get('uptime_seconds', 0) / 3600)} h")
+if host.get("temperature_c"):
+    print(f"  {host['temperature_c']} °C   disk {host.get('disk_free_percent')}% free   "
+          f"memory {host.get('memory_available_mb')} MB free")
+if backend.get("setup_required"):
+    print("\n  \033[33mSetup is not finished: no calendar configured.\033[0m")
+for warning in backend.get("config_warnings") or []:
+    print(f"  \033[33m{warning}\033[0m")
+PYEOF
+    rm -f "$health_file"
+  else
+    red "  The room software is not answering on port $port."
+    dim "  Try:  roomctl restart backend   then   roomctl logs backend"
+  fi
+  printf '\n'
+  cmd_panel
+}
+
+cmd_panel() {
+  room_load_config || true
+  local port lan pin address
+  port="$(room_config DASHBOARD_PORT 8080)"
+  lan="$(room_config ADMIN_LAN_ACCESS false)"
+  pin="$(room_config ADMIN_PIN '')"
+
+  bold "Control panel"
+  if room_is_true "$lan"; then
+    address="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -n "$address" ] || address="$(hostname).local"
+    green "  http://${address}:${port}/panel"
+    if [ -n "$pin" ]; then
+      dim "  PIN required (roomctl pin <digits> to change it)"
+    else
+      red "  No PIN set — network access is refused until one exists."
+    fi
+  else
+    dim "  http://127.0.0.1:${port}/panel   (this Pi only)"
+    dim "  To reach it from a phone:  roomctl lan-admin on"
+  fi
+}
+
+cmd_units() {
+  local action="$1"; shift
+  local what="${1:-all}"
+  local unit
+
+  if [ "$what" = "all" ]; then
+    # Order matters on restart: backend first so the browser reloads a live app.
+    for unit in room-dashboard.service room-airplay.service room-remote.service room-kiosk.service; do
+      printf '  %s %s… ' "$action" "$unit"
+      if systemctl --user "$action" "$unit" 2>/dev/null; then green "ok"; else red "failed"; fi
+    done
+    return 0
+  fi
+
+  unit="$(resolve_unit "$what" || true)"
+  if [ -z "$unit" ]; then
+    red "Unknown target '$what'."
+    dim "Use: browser | airplay | remote | backend | watchdog | all"
+    exit 1
+  fi
+  printf '  %s %s… ' "$action" "$unit"
+  if systemctl --user "$action" "$unit" 2>/dev/null; then green "ok"; else red "failed"; fi
+}
+
+cmd_logs() {
+  local unit="" follow=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -f | --follow) follow="-f" ;;
+      *) unit="$(resolve_unit "$1" || printf '%s' "$1")" ;;
+    esac
+    shift
+  done
+  local args=(--user --no-pager -n 200)
+  [ -n "$follow" ] && args+=("$follow")
+  if [ -n "$unit" ]; then
+    args+=(-u "$unit")
+  else
+    local u
+    for u in "${UNITS[@]}"; do args+=(-u "$u"); done
+  fi
+  journalctl "${args[@]}"
+}
+
+cmd_config() {
+  room_load_config || true
+  printf '%s\n' "$ROOM_CONFIG_CACHE" | while IFS='=' read -r key value; do
+    case "$key" in
+      ADMIN_PIN | AIRPLAY_PIN | CALENDAR_ICS_URL)
+        [ -n "$value" ] && value="********"
+        ;;
+    esac
+    printf '  %-32s %s\n' "$key" "$value"
+  done
+}
+
+cmd_get() {
+  [ $# -ge 1 ] || { red "Usage: roomctl get KEY"; exit 1; }
+  room_load_config || true
+  room_config "$1" "(not a setting)"
+}
+
+cmd_set() {
+  [ $# -ge 2 ] || { red "Usage: roomctl set KEY VALUE"; exit 1; }
+  local key="$1"; shift
+  local value="$*"
+  ROOM_SET_KEY="$key" ROOM_SET_VALUE="$value" py - << 'PYEOF'
+import os
+import sys
+
+sys.path.insert(0, ".")
+from app.config import get_config
+from app.config_schema import FIELDS_BY_KEY, SECRET_KEYS
+
+key = os.environ["ROOM_SET_KEY"]
+value = os.environ["ROOM_SET_VALUE"]
+
+if key not in FIELDS_BY_KEY:
+    print(f"'{key}' is not a setting. Try: roomctl config")
+    sys.exit(1)
+
+config = get_config()
+changed, errors = config.update({key: value})
+if errors:
+    for field, problem in errors.items():
+        print(f"{field}: {problem}")
+    sys.exit(1)
+
+shown = "********" if key in SECRET_KEYS and value else value
+if changed:
+    print(f"{key} = {shown}")
+    units = config.restart_units_for_changes(changed)
+    if units:
+        print("Restart to apply:  roomctl restart " + " ".join(
+            u.replace("room-", "").replace(".service", "").replace(".timer", "")
+            for u in units))
+else:
+    print(f"{key} was already {shown}")
+PYEOF
+}
+
+cmd_calendar() {
+  [ $# -ge 1 ] || { red "Usage: roomctl calendar <ics-url>"; exit 1; }
+  cmd_set CALENDAR_SOURCE ics >/dev/null
+  cmd_set CALENDAR_ICS_URL "$1"
+  dim "Fetching now…"
+  room_load_config || true
+  local port; port="$(room_config DASHBOARD_PORT 8080)"
+  room_post_internal /api/internal/token-check '{}' >/dev/null 2>&1 || true
+  py - << 'PYEOF'
+import sys
+import time
+
+sys.path.insert(0, ".")
+from app.calendar_service import CalendarService
+from app.config import get_config
+
+service = CalendarService(get_config())
+service._refresh_once()  # noqa: SLF001 - a deliberate one-shot check
+status = service.status()
+if status["ok"]:
+    print(f"  ✓ {status['meeting_count']} meeting(s) found.")
+else:
+    print(f"  ✗ {status['error']}")
+    sys.exit(1)
+PYEOF
+}
+
+cmd_pin() {
+  [ $# -ge 1 ] || { red "Usage: roomctl pin <digits>"; exit 1; }
+  cmd_set ADMIN_PIN "$1"
+}
+
+cmd_lan_admin() {
+  local mode="${1:-}"
+  case "$mode" in
+    on)
+      room_load_config || true
+      local pin; pin="$(room_config ADMIN_PIN '')"
+      if [ -z "$pin" ]; then
+        if [ $# -ge 2 ]; then
+          cmd_set ADMIN_PIN "$2" || exit 1
+        else
+          red "Set a PIN first:  roomctl lan-admin on <digits>"
+          exit 1
+        fi
+      fi
+      cmd_set ADMIN_LAN_ACCESS true
+      cmd_units restart backend
+      sleep 2
+      cmd_panel
+      ;;
+    off)
+      cmd_set ADMIN_LAN_ACCESS false
+      cmd_units restart backend
+      ;;
+    *)
+      red "Usage: roomctl lan-admin on [PIN] | off"
+      exit 1
+      ;;
+  esac
+}
+
+cmd_doctor() {
+  bold "1/3  Conference bar"
+  "$HERE/detect-poly.sh" || true
+  bold "2/3  Remote / controller"
+  "$HERE/diagnose-remote.sh" --list || true
+  bold "3/3  Room status"
+  cmd_status
+}
+
+cmd_reset() {
+  printf 'Reset every setting to its default? The calendar link and PIN are kept. [y/N] '
+  read -r answer
+  case "$answer" in
+    y | Y | yes) ;;
+    *) dim "Cancelled."; exit 0 ;;
+  esac
+  py - << 'PYEOF'
+import sys
+
+sys.path.insert(0, ".")
+from app.config import get_config
+
+changed = get_config().reset_to_defaults(
+    keep=("CALENDAR_ICS_URL", "CALENDAR_SOURCE", "ADMIN_PIN", "ADMIN_LAN_ACCESS",
+          "ROOM_NAME", "TIMEZONE")
+)
+print(f"  {len(changed)} setting(s) reset.")
+PYEOF
+  cmd_units restart all
+}
+
+cmd_appliance() {
+  local action="$1"
+  local unit
+  for unit in "${UNITS[@]}"; do
+    printf '  %s %s… ' "$action" "$unit"
+    if systemctl --user "$action" "$unit" 2>/dev/null; then green "ok"; else red "failed"; fi
+  done
+  if [ "$action" = "enable" ]; then
+    systemctl --user start "${UNITS[@]}" 2>/dev/null || true
+  else
+    systemctl --user stop "${UNITS[@]}" 2>/dev/null || true
+  fi
+}
+
+# --------------------------------------------------------------------- main
+
+COMMAND="${1:-status}"
+shift || true
+
+case "$COMMAND" in
+  status | st)       cmd_status ;;
+  panel | url)       cmd_panel ;;
+  doctor | check)    cmd_doctor ;;
+  restart)           cmd_units restart "$@" ;;
+  start)             cmd_units start "$@" ;;
+  stop)              cmd_units stop "$@" ;;
+  logs | log)        cmd_logs "$@" ;;
+  config | settings) cmd_config ;;
+  get)               cmd_get "$@" ;;
+  set)               cmd_set "$@" ;;
+  calendar | cal)    cmd_calendar "$@" ;;
+  pin)               cmd_pin "$@" ;;
+  lan-admin | lan)   cmd_lan_admin "$@" ;;
+  reset)             cmd_reset ;;
+  reboot)            dim "Rebooting…"; sudo -n systemctl reboot || sudo systemctl reboot ;;
+  enable)            cmd_appliance enable ;;
+  disable)           cmd_appliance disable ;;
+  help | -h | --help) usage ;;
+  *) red "Unknown command '$COMMAND'"; printf '\n'; usage; exit 1 ;;
+esac

@@ -1,0 +1,38 @@
+# Room appliance: the Chromium kiosk on the TV.
+#
+# Independent of the backend on purpose: if the backend crashes, the TV keeps
+# showing the page (which reconnects by itself); if Chromium crashes, systemd
+# restarts it here without touching anything else.
+
+[Unit]
+Description=Meeting room Chromium kiosk
+Documentation=file://__ROOM_DIR__/README.md
+
+# Ordering only, not a requirement: start-kiosk.sh waits for a display itself,
+# which is more reliable than depending on a target that some desktop sessions
+# never reach.
+After=graphical-session.target room-dashboard.service
+Wants=room-dashboard.service
+
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/scripts/start-kiosk.sh
+
+Restart=always
+RestartSec=5
+# Chromium can take a moment to shut down cleanly; let it.
+TimeoutStopSec=15
+KillSignal=SIGTERM
+# Kill every Chromium helper process, not just the launcher.
+KillMode=control-group
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-kiosk
+
+[Install]
+WantedBy=default.target

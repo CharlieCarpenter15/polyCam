@@ -1,0 +1,16 @@
+# Runs the watchdog check every minute.
+
+[Unit]
+Description=Meeting room watchdog timer
+Documentation=file://__ROOM_DIR__/README.md
+
+[Timer]
+# First check two minutes after boot, so the room has time to start normally.
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=room-watchdog.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

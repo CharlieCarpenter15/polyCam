@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set active_page = 'panel' %}
+{% block title %}Control · {{ room_name }}{% endblock %}
+
+{% block content %}
+
+  {% if setup_required %}
+    <div class="notice notice-warn">
+      This room has no calendar yet. <a href="{{ url_for('settings_page') }}">Open Settings</a>
+      and paste the room calendar's ICS link.
+    </div>
+  {% endif %}
+
+  <!-- Now / status ------------------------------------------------------- -->
+  <section class="block status-card">
+    <div class="status-row">
+      <div>
+        <div class="status-mode" id="mode-text">Loading…</div>
+        <p class="status-sub" id="mode-sub"></p>
+      </div>
+      <span class="pill" id="health-pill"><span class="dot"></span><span id="health-text">…</span></span>
+    </div>
+    <div class="btn-row" style="margin-top:14px">
+      <button class="btn btn-primary btn-big" id="join-now" style="flex:1 1 190px">Join next meeting</button>
+      <button class="btn btn-big" id="show-dashboard" style="flex:1 1 150px">Show dashboard</button>
+    </div>
+    <p class="block-note" id="active-note" hidden></p>
+  </section>
+
+  <!-- Meetings ----------------------------------------------------------- -->
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Today's meetings</h2>
+      <button class="btn btn-small btn-quiet" id="refresh-calendar">Refresh</button>
+    </div>
+    <div class="block-body">
+      <ul class="meeting-list" id="meeting-list"></ul>
+      <p class="empty-note" id="meeting-empty">Loading meetings…</p>
+    </div>
+  </section>
+
+  <!-- Sound -------------------------------------------------------------- -->
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Sound</h2></div>
+    <div class="block-body">
+      <div class="field">
+        <label class="field-label" for="volume">Speaker volume <span id="volume-value">—</span></label>
+        <input type="range" id="volume" min="0" max="100" step="5" value="65">
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="mute-toggle" style="flex:1 1 160px">Mute microphone</button>
+        <button class="btn" id="camera-toggle" style="flex:1 1 160px">Toggle camera</button>
+      </div>
+      <p class="block-note" id="audio-note" style="margin-left:0"></p>
+    </div>
+  </section>
+
+  <!-- Background slideshow ----------------------------------------------- -->
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Background</h2>
+      <span class="block-note" style="margin:0" id="background-count"></span>
+    </div>
+    <div class="block-body">
+      <div class="field">
+        <label class="field-label" for="background-mode">Show</label>
+        <select id="background-mode">
+          <option value="theme">Built-in gradient</option>
+          <option value="slideshow">Slideshow of my images</option>
+          <option value="solid">Single colour</option>
+        </select>
+      </div>
+
+      <div id="slideshow-options" hidden>
+        <div class="field">
+          <label class="field-label" for="background-seconds">
+            Seconds per image <span id="seconds-value">45</span>
+          </label>
+          <input type="range" id="background-seconds" min="5" max="300" step="5" value="45">
+        </div>
+        <div class="field">
+          <label class="field-label" for="background-dim">
+            Darken for readability <span id="dim-value">55%</span>
+          </label>
+          <input type="range" id="background-dim" min="0" max="95" step="5" value="55">
+        </div>
+        <div class="field">
+          <label class="switch">
+            <span class="switch-text">
+              <span class="field-label" style="margin:0">Shuffle</span>
+              <span class="field-help" style="margin:0">Play images in random order.</span>
+            </span>
+            <input type="checkbox" id="background-shuffle">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="thumb-grid" id="thumb-grid"></div>
+      <input type="file" id="upload-input" accept="image/jpeg,image/png,image/gif,image/webp"
+             multiple hidden>
+      <p class="block-note" style="margin-left:0" id="upload-note"></p>
+    </div>
+  </section>
+
+  <!-- Fix it ------------------------------------------------------------- -->
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">If something looks wrong</h2>
+    </div>
+    <p class="block-note">
+      Work down the list. Each step is safe and takes a few seconds; the room
+      comes back on its own.
+    </p>
+    <div class="block-body">
+      <div class="btn-grid">
+        <button class="btn" data-restart="browser">1 · Restart the TV display</button>
+        <button class="btn" data-restart="airplay">2 · Restart AirPlay</button>
+        <button class="btn" data-restart="backend">3 · Restart room software</button>
+        <button class="btn" data-restart="all">4 · Restart everything</button>
+      </div>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn btn-danger" id="reset-safe" style="flex:1 1 200px">
+          Reset settings to safe defaults
+        </button>
+        <button class="btn btn-danger" id="reboot" style="flex:1 1 160px">Reboot the Pi</button>
+      </div>
+      <p class="block-note" style="margin-left:0">
+        A reset keeps the calendar link, room name and admin PIN. A reboot takes about a minute.
+      </p>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-body">
+      <div class="btn-row">
+        <a class="btn btn-quiet" href="{{ url_for('settings_page') }}">All settings</a>
+        <a class="btn btn-quiet" href="{{ url_for('diagnostics_page') }}">Diagnostics &amp; logs</a>
+        {% if not is_local %}
+          <button class="btn btn-quiet" id="sign-out">Sign out</button>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='panel.js') }}"></script>
+{% endblock %}

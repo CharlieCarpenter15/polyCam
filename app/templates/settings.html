@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% set active_page = 'settings' %}
+{% block title %}Settings · {{ room_name }}{% endblock %}
+
+{% macro field_input(f, values, advisories, env_locked) %}
+  {% set value = values.get(f.key) %}
+  {% set locked = f.key in env_locked %}
+  <div class="field" data-key="{{ f.key }}">
+    {% if f.type == 'bool' %}
+      <label class="switch">
+        <span class="switch-text">
+          <span class="field-label" style="margin:0">{{ f.label }}</span>
+          {% if f.help %}<span class="field-help" style="margin:0">{{ f.help }}</span>{% endif %}
+        </span>
+        <input type="checkbox" data-setting="{{ f.key }}" {% if value %}checked{% endif %}
+               {% if locked %}disabled{% endif %}>
+        <span class="switch-track"></span>
+      </label>
+    {% else %}
+      <label class="field-label" for="f-{{ f.key }}">{{ f.label }}</label>
+      {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+
+      {% if f.type == 'choice' %}
+        <select id="f-{{ f.key }}" data-setting="{{ f.key }}" {% if locked %}disabled{% endif %}>
+          {% for choice in f.choices %}
+            <option value="{{ choice }}" {% if value == choice %}selected{% endif %}>{{ choice }}</option>
+          {% endfor %}
+        </select>
+      {% elif f.type == 'list' %}
+        <textarea id="f-{{ f.key }}" data-setting="{{ f.key }}" rows="5"
+                  placeholder="{{ f.placeholder }}"
+                  {% if locked %}disabled{% endif %}>{{ (value or []) | join('\n') }}</textarea>
+      {% elif f.type in ('int', 'float') %}
+        <input type="number" id="f-{{ f.key }}" data-setting="{{ f.key }}"
+               value="{{ value }}"
+               {% if f.minimum is not none %}min="{{ f.minimum }}"{% endif %}
+               {% if f.maximum is not none %}max="{{ f.maximum }}"{% endif %}
+               {% if f.type == 'float' %}step="0.5"{% else %}step="1"{% endif %}
+               inputmode="numeric" {% if locked %}disabled{% endif %}>
+      {% elif f.type == 'password' %}
+        <input type="password" id="f-{{ f.key }}" data-setting="{{ f.key }}"
+               value="{{ value }}" placeholder="{{ f.placeholder }}"
+               autocomplete="new-password" inputmode="numeric"
+               {% if locked %}disabled{% endif %}>
+      {% else %}
+        <input type="text" id="f-{{ f.key }}" data-setting="{{ f.key }}"
+               value="{{ value }}" placeholder="{{ f.placeholder }}"
+               autocomplete="off" autocapitalize="off" spellcheck="false"
+               {% if locked %}disabled{% endif %}>
+      {% endif %}
+    {% endif %}
+
+    {% if advisories.get(f.key) %}
+      <p class="field-advisory">{{ advisories[f.key] }}</p>
+    {% endif %}
+    {% if locked %}
+      <p class="locked-note">Set by an environment variable, so it cannot be changed here.</p>
+    {% endif %}
+    <p class="field-error" data-error-for="{{ f.key }}" hidden></p>
+  </div>
+{% endmacro %}
+
+{% block content %}
+
+  {% for warning in warnings %}
+    <div class="notice notice-warn">{{ warning }}</div>
+  {% endfor %}
+
+  {% if setup_required %}
+    <div class="notice notice-info">
+      <strong>First-time setup:</strong> open <em>Calendar</em> below and paste the room
+      calendar's ICS/iCal link, then press Save. Everything else already has a
+      sensible default.
+    </div>
+  {% endif %}
+
+  {#
+    novalidate on purpose: the browser's own constraint checking silently
+    blocks the submit and shows a small native tooltip, which means the
+    server's messages (which are clearer, appear inline, and cover rules that
+    involve more than one field) would never be seen. The backend validates
+    everything regardless, so there is one consistent path.
+  #}
+  <form id="settings-form" autocomplete="off" novalidate>
+    {% for gid, title, group_help, fields in groups %}
+      <details class="block group" {% if gid in ('room', 'calendar') or (setup_required and gid == 'calendar') %}open{% endif %}>
+        <summary class="group-toggle">
+          <span>{{ title }}</span>
+          <span class="chevron" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 6l6 6-6 6"></path>
+            </svg>
+          </span>
+        </summary>
+        <div class="group-content">
+          {% if group_help %}<p class="field-help" style="margin-top:0">{{ group_help }}</p>{% endif %}
+
+          {% for f in fields if not f.advanced %}
+            {{ field_input(f, values, advisories, env_locked) }}
+          {% endfor %}
+
+          {% set advanced = fields | selectattr('advanced') | list %}
+          {% if advanced %}
+            <details class="advanced-block">
+              <summary class="advanced-summary">Advanced ({{ advanced | length }})</summary>
+              <div style="padding-top:12px">
+                {% for f in advanced %}
+                  {{ field_input(f, values, advisories, env_locked) }}
+                {% endfor %}
+              </div>
+            </details>
+          {% endif %}
+        </div>
+      </details>
+    {% endfor %}
+
+    <div class="save-bar">
+      <span class="save-status" id="save-status">No unsaved changes</span>
+      <button type="submit" class="btn btn-primary" id="save-button">Save</button>
+    </div>
+  </form>
+
+  <p class="block-note" style="margin: 12px 0 0">
+    Settings are stored in <code>{{ config_path }}</code> (readable only by this
+    account). Changes that need a service restart are applied for you.
+  </p>
+
+  <section class="block" style="margin-top:20px">
+    <div class="block-head"><h2 class="block-title">Start again</h2></div>
+    <div class="block-body">
+      <div class="btn-row">
+        <button class="btn btn-danger" id="reset-keep">Reset, keep calendar &amp; PIN</button>
+        <button class="btn btn-danger" id="reset-all">Reset absolutely everything</button>
+      </div>
+      <p class="block-note" style="margin-left:0">
+        The previous configuration is kept as
+        <code>{{ config_path }}.bak</code>, so a reset can be undone by hand.
+      </p>
+    </div>
+  </section>
+
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='settings.js') }}"></script>
+{% endblock %}

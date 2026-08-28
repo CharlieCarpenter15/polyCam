@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body_class %}login-page{% endblock %}
+{% block title %}Sign in · {{ room_name }}{% endblock %}
+
+{% block content %}
+  <section class="block">
+    <div class="block-body">
+      <h1 style="margin:0 0 6px;font-size:22px">{{ room_name }}</h1>
+      <p class="field-help">Enter the room's admin PIN to change settings.</p>
+
+      {% if message %}<div class="notice notice-error">{{ message }}</div>{% endif %}
+
+      {% if not pin_set %}
+        <div class="notice notice-warn">
+          No admin PIN has been set. Open the Settings page from the Raspberry Pi
+          itself (a keyboard is needed just this once) and set one under
+          <em>System &amp; access</em>.
+        </div>
+      {% endif %}
+
+      <form method="post" action="{{ url_for('login') }}">
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field">
+          <label class="field-label" for="pin">Admin PIN</label>
+          <input class="pin-input" type="password" id="pin" name="pin"
+                 inputmode="numeric" autocomplete="current-password"
+                 pattern="[0-9]*" autofocus required>
+        </div>
+        <button class="btn btn-primary btn-block btn-big" type="submit">Sign in</button>
+      </form>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,43 @@
+# Room appliance: backend, dashboard and control panel.
+#
+# Installed as a systemd *user* unit for the desktop user, because the
+# appliance needs that session's audio (PipeWire) and display. Restarting it
+# therefore needs no privileges.
+#
+# Installed to ~/.config/systemd/user/ by scripts/install.sh, which replaces
+# __ROOM_DIR__ and __ROOM_USER__ with real values.
+
+[Unit]
+Description=Meeting room dashboard backend
+Documentation=file://__ROOM_DIR__/README.md
+After=network-online.target
+Wants=network-online.target
+
+# Never stop trying. The default start limit would give up after a few rapid
+# failures and leave the room dark — exactly what must not happen.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/.venv/bin/python -m app.main
+
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+# Flush log lines to the journal as they happen, not when a buffer fills.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+# The backend may need `sudo systemctl reboot` as a last-resort recovery, so
+# NoNewPrivileges must stay off here (it would block setuid sudo).
+PrivateTmp=no
+
+# Tag journal entries so `journalctl -t room-dashboard` works.
+SyslogIdentifier=room-dashboard
+
+[Install]
+WantedBy=default.target

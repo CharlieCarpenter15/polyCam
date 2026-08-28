@@ -1,0 +1,31 @@
+# Room appliance: optional Poly remote / controller button handling.
+#
+# Enabled by scripts/install.sh but inert until POLY_REMOTE_ENABLED is turned
+# on in Settings, so having it installed costs nothing.
+
+[Unit]
+Description=Meeting room remote control handler
+Documentation=file://__ROOM_DIR__/README.md
+After=room-dashboard.service
+Wants=room-dashboard.service
+
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/.venv/bin/python -m app.remote_runner
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+# Reading /dev/input needs membership of the 'input' group, which install.sh
+# adds for __ROOM_USER__.
+SyslogIdentifier=room-remote
+
+[Install]
+WantedBy=default.target

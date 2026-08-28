@@ -1,0 +1,32 @@
+# Room appliance: AirPlay receiver (UxPlay) and its event supervisor.
+#
+# Kept separate from the backend so people can still share their screen while
+# the room software is restarting.
+
+[Unit]
+Description=Meeting room AirPlay receiver
+Documentation=file://__ROOM_DIR__/README.md
+After=graphical-session.target network-online.target avahi-daemon.service
+Wants=network-online.target
+
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/scripts/start-airplay.sh
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+KillMode=control-group
+
+Environment=PYTHONUNBUFFERED=1
+# GStreamer picks a sensible sink on its own; override here if a room needs it.
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-airplay
+
+[Install]
+WantedBy=default.target

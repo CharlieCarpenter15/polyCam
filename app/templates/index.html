@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ room_name }}</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>:root { --accent: {{ accent }}; }</style>
+</head>
+<body class="dashboard" data-csrf="{{ csrf }}">
+
+  <!-- Background: gradient, solid colour, or a slideshow of uploaded images -->
+  <div class="backdrop" id="backdrop" aria-hidden="true">
+    <div class="backdrop-layer" id="backdrop-a"></div>
+    <div class="backdrop-layer" id="backdrop-b"></div>
+    <div class="backdrop-shade" id="backdrop-shade"></div>
+  </div>
+
+  <main class="screen" id="screen">
+
+    <header class="top">
+      <div class="room">
+        <h1 class="room-name" id="room-name">{{ room_name }}</h1>
+        <p class="room-subtitle" id="room-subtitle"></p>
+      </div>
+      <div class="availability" id="availability">
+        <span class="availability-dot"></span>
+        <span class="availability-text" id="availability-text">Loading…</span>
+      </div>
+    </header>
+
+    <section class="clock-block">
+      <div class="clock" id="clock" aria-live="off">--:--</div>
+      <div class="date" id="date"></div>
+    </section>
+
+    <!-- Banner strip: offline, calendar trouble, setup needed -->
+    <div class="banner" id="banner" hidden></div>
+
+    <section class="cards">
+
+      <article class="card card-next" id="next-card">
+        <h2 class="card-title" id="next-label">Next meeting</h2>
+        <div class="next-empty" id="next-empty">
+          <p class="next-empty-text">No more meetings today</p>
+          <p class="next-empty-sub">The room is free</p>
+        </div>
+        <div class="next-detail" id="next-detail" hidden>
+          <h3 class="meeting-title" id="next-title"></h3>
+          <p class="meeting-time" id="next-time"></p>
+          <p class="meeting-provider" id="next-provider">
+            <span class="provider-badge" id="next-provider-badge"></span>
+            <span id="next-provider-name"></span>
+          </p>
+          <p class="meeting-countdown" id="next-countdown"></p>
+          <button class="join-button" id="join-button" type="button">
+            <span class="join-label">Join</span>
+          </button>
+          <p class="join-hint" id="join-hint"></p>
+        </div>
+      </article>
+
+      <article class="card card-upcoming" id="upcoming-card">
+        <h2 class="card-title">Upcoming</h2>
+        <ul class="upcoming-list" id="upcoming-list"></ul>
+        <p class="upcoming-empty" id="upcoming-empty">Nothing else scheduled</p>
+      </article>
+
+    </section>
+
+    <footer class="bottom">
+      <div class="sharing" id="sharing" >
+        <span class="sharing-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 6h16v9H4z"></path><path d="M9 19h6"></path><path d="M12 15v4"></path>
+          </svg>
+        </span>
+        <span class="sharing-text">
+          Screen Mirroring &rarr; <strong id="airplay-name">{{ room_name }}</strong>
+        </span>
+      </div>
+
+      <div class="indicators" id="indicators"></div>
+
+      <div class="panel-hint" id="panel-hint" hidden>
+        Control panel: <strong id="panel-url"></strong>
+      </div>
+    </footer>
+
+  </main>
+
+  <!-- Full-screen overlay while someone is mirroring, in case UxPlay is not
+       covering the whole screen (or is still starting up) -->
+  <section class="overlay overlay-sharing" id="overlay-sharing" hidden>
+    <div class="overlay-inner">
+      <div class="overlay-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5h16v11H4z"></path><path d="M8 20h8"></path><path d="M12 16v4"></path>
+        </svg>
+      </div>
+      <h2 class="overlay-title">Screen sharing</h2>
+      <p class="overlay-text" id="sharing-client"></p>
+      <p class="overlay-sub">Stop mirroring on your device to return to the room screen.</p>
+    </div>
+  </section>
+
+  <!-- First-run instructions, shown until a calendar is configured -->
+  <section class="overlay overlay-setup" id="overlay-setup" hidden>
+    <div class="overlay-inner">
+      <p class="setup-eyebrow">Nearly there</p>
+      <h2 class="overlay-title">Finish setting up this room</h2>
+      <p class="overlay-text">On your phone or laptop, open</p>
+      <p class="setup-url" id="setup-url">http://…/panel</p>
+      <p class="overlay-sub" id="setup-hint">
+        Add the room calendar link and this screen will start showing meetings.
+      </p>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <noscript>
+    <div class="noscript">
+      This dashboard needs JavaScript. Check that Chromium started correctly:
+      <code>systemctl --user status room-kiosk</code>
+    </div>
+  </noscript>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,580 @@
+/* ==========================================================================
+   Meeting-room dashboard — designed to be read from across a room.
+   Sizes are in `vw`/`clamp()` so the same stylesheet works on a 1080p TV, a
+   4K TV and a laptop while developing. Nothing here depends on a font or a
+   script being downloaded from the internet.
+   ========================================================================== */
+
+:root {
+  --accent: #3d8bfd;
+
+  --bg: #070b14;
+  --bg-soft: #0d1424;
+  --panel: rgba(255, 255, 255, 0.055);
+  --panel-strong: rgba(255, 255, 255, 0.085);
+  --border: rgba(255, 255, 255, 0.11);
+  --text: #f2f5fa;
+  --text-dim: #9aa7bd;
+  --text-faint: #6b7688;
+
+  --ok: #3ddc84;
+  --warn: #ffb020;
+  --error: #ff5d5d;
+  --off: #55607a;
+
+  --radius: 1.1vw;
+  --gap: 2vw;
+
+  --shadow: 0 1.5vw 4vw rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="light"] {
+  --bg: #eef1f6;
+  --bg-soft: #ffffff;
+  --panel: rgba(14, 22, 40, 0.045);
+  --panel-strong: rgba(14, 22, 40, 0.075);
+  --border: rgba(14, 22, 40, 0.12);
+  --text: #10182a;
+  --text-dim: #4d5a70;
+  --text-faint: #7a8698;
+  --off: #a6b0c0;
+  --shadow: 0 1vw 3vw rgba(16, 24, 42, 0.12);
+}
+
+* { box-sizing: border-box; }
+
+/* The `hidden` attribute must beat every author rule below.
+   Without this, any element toggled with `hidden` stays visible if its own
+   class sets a `display` value: a class selector outranks the browser's
+   built-in `[hidden] { display: none }`. That silently left the full-screen
+   overlays covering the dashboard. */
+[hidden] { display: none !important; }
+
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body.dashboard {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "Helvetica Neue", "Segoe UI", Roboto, system-ui, -apple-system,
+    "DejaVu Sans", sans-serif;
+  font-size: 1.35vw;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  cursor: default;
+  user-select: none;
+}
+
+body.dashboard.hide-cursor { cursor: none; }
+
+/* ---------------------------------------------------------------- backdrop */
+
+.backdrop { position: fixed; inset: 0; z-index: 0; background: var(--bg); }
+
+.backdrop::after {
+  /* Default look: a calm diagonal wash, no image required. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120vw 80vh at 12% -10%, rgba(61, 139, 253, 0.20), transparent 62%),
+    radial-gradient(90vw 70vh at 105% 110%, rgba(120, 80, 235, 0.16), transparent 60%),
+    linear-gradient(158deg, var(--bg) 0%, var(--bg-soft) 68%, var(--bg) 100%);
+}
+
+.backdrop.has-image::after { display: none; }
+
+.backdrop-layer {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0;
+  transition: opacity 1.6s ease-in-out;
+  will-change: opacity;
+}
+
+.backdrop-layer.visible { opacity: 1; }
+
+.backdrop-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0.15) 45%, rgba(0,0,0,0.55));
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.backdrop.has-image .backdrop-shade { opacity: 1; }
+
+/* ------------------------------------------------------------------ layout */
+
+.screen {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: 1.1vw;
+  padding: 2.4vw 3.2vw 1.8vw;
+}
+
+/* --------------------------------------------------------------------- top */
+
+.top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--gap);
+}
+
+.room-name {
+  margin: 0;
+  font-size: 3.1vw;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+
+.room-subtitle {
+  margin: 0.5vw 0 0;
+  font-size: 1.35vw;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+.room-subtitle:empty { display: none; }
+
+.availability {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9vw;
+  padding: 0.85vw 1.6vw;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 1.5vw;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.availability-dot {
+  width: 1.1vw;
+  height: 1.1vw;
+  border-radius: 50%;
+  background: var(--off);
+  flex: 0 0 auto;
+}
+
+.availability.free .availability-dot { background: var(--ok); box-shadow: 0 0 1.6vw rgba(61,220,132,0.55); }
+.availability.busy .availability-dot { background: var(--error); box-shadow: 0 0 1.6vw rgba(255,93,93,0.5); }
+.availability.soon .availability-dot { background: var(--warn); box-shadow: 0 0 1.6vw rgba(255,176,32,0.5); }
+.availability.free { color: var(--ok); }
+.availability.busy { color: var(--error); }
+.availability.soon { color: var(--warn); }
+
+/* ------------------------------------------------------------------- clock */
+
+.clock-block { text-align: center; margin: 0.4vw 0 0.2vw; }
+
+.clock {
+  font-size: 9.4vw;
+  font-weight: 250;
+  line-height: 0.94;
+  letter-spacing: -0.028em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0.4vw 2.4vw rgba(0, 0, 0, 0.35);
+}
+
+.clock .meridiem {
+  font-size: 0.28em;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  margin-left: 0.35em;
+  color: var(--text-dim);
+  vertical-align: 0.55em;
+}
+
+.date {
+  margin-top: 0.3vw;
+  font-size: 1.6vw;
+  color: var(--text-dim);
+  letter-spacing: 0.055em;
+}
+
+/* ------------------------------------------------------------------ banner */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 1vw;
+  padding: 0.95vw 1.6vw;
+  border-radius: 0.7vw;
+  font-size: 1.3vw;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.banner::before {
+  content: "";
+  width: 0.75vw;
+  height: 0.75vw;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: currentColor;
+}
+
+.banner.warn  { color: var(--warn);  background: rgba(255, 176, 32, 0.11); border-color: rgba(255, 176, 32, 0.3); }
+.banner.error { color: var(--error); background: rgba(255, 93, 93, 0.11);  border-color: rgba(255, 93, 93, 0.3); }
+.banner.info  { color: var(--accent); background: rgba(61, 139, 253, 0.11); border-color: rgba(61, 139, 253, 0.3); }
+
+/* ------------------------------------------------------------------- cards */
+
+.cards {
+  display: grid;
+  grid-template-columns: 1.55fr 1fr;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.7vw 2vw;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* A card never spills past its own edge, whatever the meeting is called. */
+  overflow: hidden;
+}
+
+.card-title {
+  margin: 0 0 0.9vw;
+  font-size: 1.1vw;
+  font-weight: 700;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* next meeting
+
+   #next-detail is the flex column, not .card: `margin-top: auto` on the JOIN
+   button only works when the button is a direct flex child, and putting the
+   growth here keeps the button inside the card on a short screen. */
+
+.next-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.meeting-title {
+  margin: 0;
+  font-size: 2.7vw;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: -0.012em;
+  overflow-wrap: anywhere;
+}
+
+.meeting-time {
+  margin: 0.6vw 0 0;
+  font-size: 1.95vw;
+  font-weight: 300;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.meeting-provider {
+  margin: 0.75vw 0 0;
+  display: flex;
+  align-items: center;
+  gap: 0.8vw;
+  font-size: 1.35vw;
+  color: var(--text-dim);
+}
+
+.provider-badge {
+  width: 1.5vw;
+  height: 1.5vw;
+  border-radius: 0.35vw;
+  flex: 0 0 auto;
+  background: var(--off);
+}
+
+.provider-badge.teams { background: #5b5fc7; }
+.provider-badge.meet  { background: #00832d; }
+.provider-badge.zoom  { background: #2d8cff; }
+.provider-badge.webex { background: #00bceb; }
+.provider-badge.other { background: var(--off); }
+
+.meeting-countdown {
+  margin: 0.6vw 0 0;
+  font-size: 1.25vw;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.meeting-countdown:empty { display: none; }
+
+.join-button {
+  margin-top: auto;
+  flex: 0 0 auto;
+  width: 100%;
+  padding: 1.5vw 2vw;
+  border: none;
+  border-radius: 0.85vw;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 2.2vw;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+  box-shadow: 0 0.8vw 2.4vw rgba(61, 139, 253, 0.34);
+}
+
+.join-button:hover:not(:disabled) { filter: brightness(1.09); }
+.join-button:active:not(:disabled) { transform: translateY(0.25vw) scale(0.995); }
+.join-button:focus-visible { outline: 0.35vw solid #fff; outline-offset: 0.3vw; }
+
+.join-button:disabled {
+  background: var(--panel-strong);
+  color: var(--text-faint);
+  box-shadow: none;
+  cursor: default;
+}
+
+.join-button.busy { opacity: 0.72; cursor: progress; }
+
+.join-hint {
+  margin: 0.8vw 0 0;
+  font-size: 1.1vw;
+  color: var(--text-faint);
+  text-align: center;
+  min-height: 1.4vw;
+}
+
+.next-empty { margin: auto 0; flex: 1 1 auto; display: flex;
+  flex-direction: column; justify-content: center; }
+.next-empty-text { margin: 0; font-size: 2.6vw; font-weight: 300; color: var(--text-dim); }
+.next-empty-sub  { margin: 0.5vw 0 0; font-size: 1.5vw; color: var(--text-faint); }
+
+/* upcoming list */
+
+.upcoming-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85vw;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.upcoming-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 1vw;
+  align-items: baseline;
+  padding-bottom: 0.85vw;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.upcoming-item:last-child { border-bottom: none; padding-bottom: 0; }
+
+.upcoming-time {
+  font-size: 1.6vw;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.upcoming-body { min-width: 0; }
+
+.upcoming-title {
+  font-size: 1.4vw;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upcoming-meta {
+  margin-top: 0.2vw;
+  font-size: 1.05vw;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 0.6vw;
+}
+
+.upcoming-meta .provider-badge { width: 0.95vw; height: 0.95vw; border-radius: 0.25vw; }
+
+.upcoming-empty { margin: auto 0; font-size: 1.5vw; color: var(--text-faint); }
+
+/* ------------------------------------------------------------------ bottom */
+
+.bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding-top: 0.6vw;
+  border-top: 1px solid var(--border);
+  font-size: 1.25vw;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+}
+
+.sharing { display: inline-flex; align-items: center; gap: 0.85vw; }
+.sharing-icon { display: inline-flex; font-size: 1.7vw; color: var(--text-faint); }
+.sharing strong { color: var(--text); font-weight: 600; }
+
+.indicators { display: inline-flex; align-items: center; gap: 1.5vw; flex-wrap: wrap; }
+
+.indicator { display: inline-flex; align-items: center; gap: 0.55vw; font-size: 1.1vw; color: var(--text-faint); }
+
+.indicator-dot {
+  width: 0.72vw;
+  height: 0.72vw;
+  border-radius: 50%;
+  background: var(--off);
+  flex: 0 0 auto;
+}
+
+.indicator-dot.ok       { background: var(--ok); }
+.indicator-dot.warning  { background: var(--warn); }
+.indicator-dot.error    { background: var(--error); }
+.indicator-dot.disabled { background: var(--off); opacity: 0.5; }
+.indicator-dot.unknown  { background: var(--off); }
+
+.indicator.error-state { color: var(--error); }
+.indicator.warn-state  { color: var(--warn); }
+
+.panel-hint { font-size: 1.1vw; color: var(--text-faint); }
+.panel-hint strong { color: var(--text-dim); font-weight: 600; }
+
+/* --------------------------------------------------------------- overlays */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 6vw;
+  background: rgba(4, 7, 14, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+html[data-theme="light"] .overlay { background: rgba(238, 241, 246, 0.96); }
+
+.overlay-inner { max-width: 72vw; }
+.overlay-icon { font-size: 8vw; color: var(--accent); line-height: 1; }
+
+.overlay-title {
+  margin: 1.4vw 0 0;
+  font-size: 4.2vw;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+}
+
+.overlay-text  { margin: 1.2vw 0 0; font-size: 2.1vw; color: var(--text-dim); }
+.overlay-sub   { margin: 1.6vw 0 0; font-size: 1.5vw; color: var(--text-faint); }
+
+.setup-eyebrow {
+  margin: 0;
+  font-size: 1.2vw;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.setup-url {
+  margin: 1.4vw 0 0;
+  font-size: 3.6vw;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: "SF Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 4vw;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 1.2vw 2.4vw;
+  border-radius: 0.7vw;
+  background: rgba(10, 16, 28, 0.95);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.5vw;
+  box-shadow: var(--shadow);
+  max-width: 70vw;
+  text-align: center;
+}
+
+.toast.error { border-color: rgba(255, 93, 93, 0.55); color: #ffd2d2; }
+
+.noscript {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  padding: 1.5vw;
+  background: var(--error);
+  color: #fff;
+  font-size: 1.4vw;
+  text-align: center;
+}
+
+/* ------------------------------------------------------- narrow / portrait */
+
+@media (max-aspect-ratio: 1/1) {
+  /* A TV rotated to portrait, or a browser window while developing. */
+  .cards { grid-template-columns: 1fr; }
+  .card-upcoming { display: none; }
+  .clock { font-size: 18vw; }
+  .room-name { font-size: 5.5vw; }
+}
+
+@media (max-width: 900px) {
+  body.dashboard { font-size: 15px; }
+  .screen { padding: 5vw 5vw 4vw; gap: 3vw; }
+  .clock { font-size: 22vw; }
+  .room-name { font-size: 6vw; }
+  .date { font-size: 4vw; }
+  .cards { grid-template-columns: 1fr; }
+  .card-upcoming { display: none; }
+  .meeting-title { font-size: 7vw; }
+  .meeting-time { font-size: 5.5vw; }
+  .join-button { font-size: 6vw; padding: 5vw; }
+  .bottom { font-size: 3.4vw; }
+  .indicators { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop-layer, .backdrop-shade, .join-button { transition: none; }
+}

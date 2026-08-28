@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Problem · {{ room_name }}{% endblock %}
+{% block content %}
+  <section class="block">
+    <div class="block-body">
+      <h1 style="margin:0 0 8px;font-size:22px">Something went wrong</h1>
+      <p class="field-help">
+        The room software hit an unexpected error. The room itself keeps running —
+        the TV will carry on showing the dashboard.
+      </p>
+      <div class="btn-row" style="margin-top:14px">
+        <a class="btn btn-primary" href="{{ url_for('panel') }}">Back to the control panel</a>
+        <a class="btn" href="{{ url_for('diagnostics_page') }}">See the logs</a>
+      </div>
+    </div>
+  </section>
+{% endblock %}

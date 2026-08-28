@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% set active_page = 'diagnostics' %}
+{% block title %}Checks · {{ room_name }}{% endblock %}
+
+{% block content %}
+
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Room health</h2>
+      <button class="btn btn-small btn-quiet" id="refresh">Refresh</button>
+    </div>
+    <div class="block-body">
+      <ul class="check-list" id="health-list">
+        <li class="check"><span class="check-name">Loading…</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Conference bar</h2></div>
+    <p class="block-note">
+      Devices the appliance can see. If your bar is missing, add a word from its
+      name to <em>USB name matches</em> in Settings &rarr; Poly conference bar.
+    </p>
+    <div class="block-body">
+      <dl class="kv" id="poly-summary"></dl>
+      <div id="poly-lists"></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Remote / controller</h2></div>
+    <p class="block-note">
+      Press <em>Discover buttons</em> then press a button on the remote. The
+      <code>KEY_…</code> name that appears is what goes in Settings.
+    </p>
+    <div class="block-body">
+      <div class="btn-row">
+        <button class="btn btn-primary" id="capture">Discover buttons (10s)</button>
+      </div>
+      <p class="block-note" style="margin-left:0" id="capture-status"></p>
+      <div class="chip-list" id="captured-keys" style="margin-top:10px"></div>
+      <dl class="kv" id="remote-summary" style="margin-top:16px"></dl>
+      <div id="remote-devices" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Meeting join automation</h2></div>
+    <p class="block-note">
+      Teams, Meet and Zoom are other companies' websites and change without
+      notice, so joining is best-effort. If a provider renames a button, add the
+      new text to <em>Buttons the auto-join may press</em> in Settings — no code
+      change needed.
+    </p>
+    <div class="block-body">
+      <dl class="kv" id="join-summary"></dl>
+      <div id="join-flows" style="margin-top:14px"></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Services</h2></div>
+    <div class="block-body">
+      <ul class="check-list" id="units"></ul>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Logs</h2>
+      <select id="log-unit" style="width:auto;min-height:38px;font-size:14px">
+        <option value="">Everything</option>
+        {% for unit in units %}<option value="{{ unit }}">{{ unit }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="block-body">
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn btn-small" id="load-logs">Load latest</button>
+        <label class="switch" style="min-height:38px;flex:0 0 auto;gap:8px">
+          <span class="switch-text"><span class="field-help" style="margin:0">Auto-refresh</span></span>
+          <input type="checkbox" id="log-auto">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+      <pre class="log" id="log-output">Press “Load latest”.</pre>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head"><h2 class="block-title">Where things live</h2></div>
+    <div class="block-body"><dl class="kv" id="paths"></dl></div>
+  </section>
+
+{% endblock %}
+
+{% block scripts %}
+  <script src="{{ url_for('static', filename='diagnostics.js') }}"></script>
+{% endblock %}

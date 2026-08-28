@@ -1,0 +1,21 @@
+# Room appliance: external health check.
+#
+# One-shot, run every minute by room-watchdog.timer. Catches processes that are
+# running but no longer working — something systemd cannot detect on its own.
+
+[Unit]
+Description=Meeting room watchdog check
+Documentation=file://__ROOM_DIR__/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/scripts/watchdog.sh
+
+# A check that hangs must not stack up with the next one.
+TimeoutStartSec=120
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-watchdog

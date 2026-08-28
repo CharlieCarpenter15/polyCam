@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark light">
+  <title>{% block title %}{{ room_name }}{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  <style>:root { --accent: {{ accent }}; }</style>
+</head>
+<body class="admin {% block body_class %}{% endblock %}" data-csrf="{{ csrf }}">
+
+  <header class="app-bar">
+    <div class="app-bar-inner">
+      <a class="brand" href="{{ url_for('panel') if panel_enabled else url_for('index') }}">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">{{ room_name }}</span>
+      </a>
+      <nav class="app-nav">
+        {% if panel_enabled %}
+          <a href="{{ url_for('panel') }}" class="nav-link {% if active_page == 'panel' %}current{% endif %}">Control</a>
+        {% endif %}
+        <a href="{{ url_for('settings_page') }}" class="nav-link {% if active_page == 'settings' %}current{% endif %}">Settings</a>
+        <a href="{{ url_for('diagnostics_page') }}" class="nav-link {% if active_page == 'diagnostics' %}current{% endif %}">Checks</a>
+      </nav>
+    </div>
+  </header>
+
+  {% if dev_mode %}
+    <p class="strip strip-dev">Development mode — hardware is simulated.</p>
+  {% endif %}
+
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+  <script src="{{ url_for('static', filename='common.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,830 @@
+"""The room appliance web application and its entry point.
+
+Run it directly for development::
+
+    python3 -m app.main --dev
+
+On the appliance it is started by ``room-dashboard.service``. Everything is one
+process with a handful of daemon threads (calendar refresh, room state machine,
+health monitor, Poly monitor, optional remote listener), which keeps debugging
+on a Raspberry Pi straightforward: one unit, one log, one place to look.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import signal
+import sys
+import threading
+from datetime import timedelta
+from typing import Any
+
+from flask import (
+    Flask,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    session,
+    url_for,
+)
+
+from . import __version__, paths
+from .airplay_service import AirPlayService
+from .background_service import BackgroundService
+from .browser_service import BrowserService
+from .calendar_service import CalendarService
+from .config import ConfigManager, advisories, get_config
+from .config_schema import FIELDS_BY_KEY, SECRET_KEYS, grouped_fields
+from .health_service import HealthService
+from .join_flows import PROVIDER_FLOWS
+from .logging_setup import get_logger, log_event, setup_logging
+from .meeting_service import MeetingService
+from .models import MODES
+from .poly_service import PolyService
+from .remote_service import ACTIONS, RemoteService
+from .system_service import MANAGED_UNITS, SystemService
+from .web_security import (
+    check_csrf,
+    csrf_token,
+    effective_bind_host,
+    internal_token,
+    is_admin,
+    is_local_request,
+    require_admin,
+    require_csrf,
+    require_internal,
+    flask_secret_key,
+    verify_pin,
+)
+
+log = get_logger("web")
+
+
+class RoomAppliance:
+    """Wires the services together and owns their lifecycle."""
+
+    def __init__(self, config: ConfigManager) -> None:
+        self.config = config
+        self.system = SystemService(config)
+        self.calendar = CalendarService(config)
+        self.browser = BrowserService(config, self.system)
+        self.airplay = AirPlayService(config, self.system)
+        self.poly = PolyService(config)
+        self.backgrounds = BackgroundService()
+        self.room = MeetingService(
+            config, self.calendar, self.browser, self.airplay, self.poly, self.system
+        )
+        self.health = HealthService(
+            config,
+            self.calendar,
+            self.browser,
+            self.airplay,
+            self.poly,
+            self.room,
+            self.system,
+        )
+        self.remote = RemoteService(config, self._on_remote_action)
+        self._started = False
+        config.on_change(self._on_config_change)
+
+    def _on_remote_action(self, action: str) -> None:
+        self.room.dispatch_action(action)
+
+    def _on_config_change(self, values: dict[str, Any], changed: set[str]) -> None:
+        if "LOG_LEVEL" in changed or "LOG_FORMAT" in changed:
+            setup_logging(self.config.str_("LOG_LEVEL"), self.config.str_("LOG_FORMAT"))
+            log_event(log, logging.INFO, "logging.reconfigured",
+                      level=self.config.str_("LOG_LEVEL"))
+        if "POLY_REMOTE_ENABLED" in changed:
+            if self.config.bool_("POLY_REMOTE_ENABLED"):
+                self.remote.start()
+            else:
+                self.remote.stop()
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        log_event(
+            log,
+            logging.INFO,
+            "application.started",
+            version=__version__,
+            room=self.config.str_("ROOM_NAME"),
+            dev_mode=self.config.bool_("DEV_MODE"),
+            calendar_source=self.config.str_("CALENDAR_SOURCE"),
+        )
+        self.calendar.start()
+        self.poly.start()
+        self.room.start()
+        self.health.start()
+        self.remote.start()
+
+    def stop(self) -> None:
+        log_event(log, logging.INFO, "application.stopping")
+        for service in (self.remote, self.health, self.room, self.poly, self.calendar):
+            try:
+                service.stop()
+            except Exception:  # pragma: no cover
+                log.exception("application.stop_failed")
+
+
+# ---------------------------------------------------------------------------
+# Flask app
+# ---------------------------------------------------------------------------
+
+
+def create_app(config: ConfigManager | None = None, *, start_services: bool = True) -> Flask:
+    config = config or get_config()
+    setup_logging(config.str_("LOG_LEVEL"), config.str_("LOG_FORMAT"))
+    paths.ensure_dirs()
+
+    app = Flask(
+        __name__,
+        template_folder=str(paths.TEMPLATES_DIR),
+        static_folder=str(paths.STATIC_DIR),
+        static_url_path="/static",
+    )
+    appliance = RoomAppliance(config)
+
+    app.config.update(
+        SECRET_KEY=flask_secret_key(),
+        ROOM_CONFIG=config,
+        ROOM_APPLIANCE=appliance,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Strict",
+        PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+        JSON_SORT_KEYS=False,
+        # Cap request bodies so an upload cannot exhaust memory or disk.
+        MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+        TEMPLATES_AUTO_RELOAD=config.bool_("DEV_MODE"),
+    )
+
+    register_routes(app, appliance)
+
+    if start_services:
+        appliance.start()
+    return app
+
+
+def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
+    config = appliance.config
+
+    # -- shared helpers --------------------------------------------------
+    def ok(**payload: Any):
+        return jsonify({"ok": True, **payload})
+
+    def fail(message: str, status: int = 400, **payload: Any):
+        return jsonify({"ok": False, "error": message, **payload}), status
+
+    def template_context() -> dict[str, Any]:
+        return {
+            "config": config,
+            "version": __version__,
+            "csrf": csrf_token(),
+            "is_admin": is_admin(),
+            "is_local": is_local_request(),
+            "room_name": config.str_("ROOM_NAME"),
+            "theme": config.str_("THEME"),
+            "accent": config.str_("ACCENT_COLOR"),
+            "dev_mode": config.bool_("DEV_MODE"),
+            "setup_required": config.setup_required(),
+            "panel_enabled": config.bool_("PANEL_ENABLED"),
+        }
+
+    @app.after_request
+    def security_headers(response):
+        # A kiosk page needs no third-party anything; lock it down.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; connect-src 'self'; font-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        )
+        if request.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    # -- pages -----------------------------------------------------------
+    @app.route("/")
+    def index():
+        """The room dashboard shown on the TV."""
+        return render_template("index.html", **template_context())
+
+    @app.route("/panel")
+    def panel():
+        """Phone-friendly control panel."""
+        if not config.bool_("PANEL_ENABLED"):
+            return render_template("disabled.html", **template_context()), 404
+        if not is_admin():
+            return redirect(url_for("login", next="/panel"))
+        return render_template("panel.html", **template_context())
+
+    @app.route("/settings")
+    @require_admin
+    def settings_page():
+        context = template_context()
+        context.update(
+            groups=grouped_fields(),
+            values=config.as_dict(redact=True),
+            advisories=advisories(config.as_dict()),
+            env_locked=config.env_locked_keys(),
+            config_path=str(config.file),
+            warnings=list(config.warnings),
+        )
+        return render_template("settings.html", **context)
+
+    @app.route("/diagnostics")
+    @require_admin
+    def diagnostics_page():
+        context = template_context()
+        context.update(units=MANAGED_UNITS)
+        return render_template("diagnostics.html", **context)
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        target = request.args.get("next") or request.form.get("next") or "/panel"
+        if not target.startswith("/") or target.startswith("//"):
+            target = "/panel"  # never redirect off-site
+
+        if is_admin():
+            return redirect(target)
+
+        message = ""
+        if request.method == "POST":
+            success, message = verify_pin(request.form.get("pin", ""))
+            if success:
+                return redirect(target)
+
+        context = template_context()
+        context.update(message=message, next=target,
+                       pin_set=bool(config.str_("ADMIN_PIN")))
+        return render_template("login.html", **context), (
+            200 if request.method == "GET" else 401
+        )
+
+    @app.route("/logout", methods=["POST"])
+    @require_csrf
+    def logout():
+        session.pop("admin", None)
+        return ok(signed_out=True)
+
+    # -- read-only API ---------------------------------------------------
+    @app.route("/api/state")
+    def api_state():
+        """Everything the dashboard renders, in one call."""
+        payload = appliance.room.dashboard_payload()
+        payload["backgrounds"] = {
+            "mode": config.str_("BACKGROUND_MODE"),
+            "seconds": config.int_("BACKGROUND_SLIDESHOW_SECONDS"),
+            "shuffle": config.bool_("BACKGROUND_SHUFFLE"),
+            "dim": config.int_("BACKGROUND_DIM_PERCENT"),
+            "blur": config.int_("BACKGROUND_BLUR_PIXELS"),
+            "solid": config.str_("BACKGROUND_SOLID_COLOR"),
+            "images": [image.to_dict()["url"] for image in appliance.backgrounds.list_images()],
+        }
+        payload["display"] = {
+            "show_instructions": config.bool_("SHOW_SHARING_INSTRUCTIONS"),
+            "show_status": config.bool_("SHOW_STATUS_INDICATORS"),
+            "theme": config.str_("THEME"),
+            "accent": config.str_("ACCENT_COLOR"),
+            "show_panel_url": config.bool_("PANEL_SHOW_URL_ON_TV"),
+        }
+        health = appliance.health.report()
+        payload["status"] = {
+            "overall": health["status"],
+            "components": health["components"],
+        }
+        payload["panel_url"] = _panel_url()
+        payload["version"] = __version__
+        return jsonify(payload)
+
+    @app.route("/api/health")
+    def api_health():
+        report = appliance.health.report()
+        report["units"] = {
+            unit: appliance.system.unit_state(unit) for unit in MANAGED_UNITS
+        }
+        status_code = 200 if report["status"] != "error" else 503
+        return jsonify(report), status_code
+
+    def _panel_url() -> str:
+        # request.host reflects the port this request actually arrived on, which
+        # is what the reader can reach. The configured port may differ after a
+        # settings change that has not been restarted into yet, or when --port
+        # was used.
+        addresses = appliance.system.local_ip_addresses()
+        port = config.int_("DASHBOARD_PORT")
+        try:
+            if request.host and ":" in request.host:
+                port = int(request.host.rsplit(":", 1)[1])
+        except (ValueError, RuntimeError):
+            pass
+        if config.bool_("ADMIN_LAN_ACCESS") and addresses:
+            return f"http://{addresses[0]}:{port}/panel"
+        return f"http://127.0.0.1:{port}/panel"
+
+    # -- room actions ----------------------------------------------------
+    @app.route("/api/actions/join", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_join():
+        payload = request.get_json(silent=True) or {}
+        meeting_id = str(payload.get("meeting_id") or "").strip()
+        if meeting_id:
+            success, detail = appliance.room.join_meeting_id(meeting_id)
+        else:
+            success, detail = appliance.room.join_next()
+        return (ok(detail=detail) if success else fail(detail, 409))
+
+    @app.route("/api/actions/leave", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_leave():
+        appliance.room.leave_meeting(reason="requested from the interface")
+        return ok(detail="Returned to the dashboard.")
+
+    @app.route("/api/actions/home", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_home():
+        appliance.room.go_home(reason="requested from the interface")
+        return ok(detail="Showing the dashboard.")
+
+    @app.route("/api/actions/retry-join", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_retry_join():
+        if appliance.room.retry_join_automation():
+            return ok(detail="Trying the join buttons again.")
+        return fail("There is no meeting open on the TV.", 409)
+
+    @app.route("/api/actions/refresh-calendar", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_refresh_calendar():
+        appliance.calendar.refresh_now()
+        return ok(detail="Calendar refresh requested.")
+
+    @app.route("/api/actions/volume", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_volume():
+        payload = request.get_json(silent=True) or {}
+        if "level" in payload:
+            try:
+                level = int(payload["level"])
+            except (TypeError, ValueError):
+                return fail("Volume must be a number between 0 and 100.")
+            success = appliance.poly.set_volume(level)
+            return ok(volume=level) if success else fail("No speaker is available.", 409)
+        try:
+            delta = int(payload.get("delta", config.int_("POLY_VOLUME_STEP")))
+        except (TypeError, ValueError):
+            return fail("Volume change must be a number.")
+        level = appliance.poly.adjust_volume(delta)
+        return ok(volume=level) if level is not None else fail("No speaker is available.", 409)
+
+    @app.route("/api/actions/mute", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_mute():
+        payload = request.get_json(silent=True) or {}
+        muted = payload.get("muted")
+        result = appliance.poly.set_mute(None if muted is None else bool(muted))
+        if result is None:
+            return fail("No microphone is available.", 409)
+        if appliance.room.state().active is not None:
+            appliance.browser.toggle_meeting_mute()
+        return ok(muted=result)
+
+    @app.route("/api/actions/remote/<action>", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_remote_action(action: str):
+        if action not in ACTIONS:
+            return fail(f"Unknown action. Use one of: {', '.join(ACTIONS)}")
+        result = appliance.room.dispatch_action(action)
+        return jsonify({"ok": bool(result.get("ok")), **result})
+
+    @app.route("/api/actions/airplay-simulate", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_airplay_simulate():
+        if not config.bool_("DEV_MODE"):
+            return fail("Only available in development mode.", 409)
+        payload = request.get_json(silent=True) or {}
+        appliance.airplay.simulate_sharing(bool(payload.get("sharing")))
+        return ok(sharing=appliance.airplay.sharing)
+
+    # -- restarts and recovery -------------------------------------------
+    @app.route("/api/actions/restart", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_restart():
+        payload = request.get_json(silent=True) or {}
+        target = str(payload.get("target") or "").strip().lower()
+
+        targets = {
+            "browser": ("room-kiosk.service", "The TV display is restarting."),
+            "airplay": ("room-airplay.service", "AirPlay is restarting."),
+            "remote": ("room-remote.service", "The remote handler is restarting."),
+            "backend": ("room-dashboard.service", "The room software is restarting."),
+        }
+
+        if target == "all":
+            # Order matters: the browser last, so it reloads a healthy backend.
+            done = []
+            for unit in ("room-airplay.service", "room-remote.service", "room-kiosk.service"):
+                if appliance.system.restart(unit, min_interval=2.0, reason="restart everything"):
+                    done.append(unit)
+            appliance.calendar.refresh_now()
+            appliance.poly.refresh_now()
+            return ok(detail="Restarting the room.", restarted=done)
+
+        if target not in targets:
+            return fail(f"Unknown target. Use one of: {', '.join(targets)} or 'all'.")
+
+        unit, message = targets[target]
+        if target == "backend":
+            # Answer first, then exit; systemd brings us straight back.
+            _schedule_self_restart(appliance)
+            return ok(detail=message)
+
+        if appliance.system.restart(unit, min_interval=2.0, reason="requested from the interface"):
+            return ok(detail=message)
+        return fail(
+            "That could not be restarted. It may have been restarted a moment ago, "
+            "or systemd may not be managing it.",
+            409,
+        )
+
+    @app.route("/api/actions/reboot", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_reboot():
+        if appliance.system.reboot(reason="requested from the interface", min_interval=60.0):
+            return ok(detail="The Raspberry Pi is rebooting. This takes about a minute.")
+        return fail("Reboot was refused. Check the sudo rule from install.sh.", 409)
+
+    @app.route("/api/actions/reset-safe", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_reset_safe():
+        """Return to known-good settings without losing the calendar link."""
+        keep = ("CALENDAR_ICS_URL", "CALENDAR_SOURCE", "ADMIN_PIN", "ADMIN_LAN_ACCESS",
+                "ROOM_NAME", "TIMEZONE")
+        changed = config.reset_to_defaults(keep=keep)
+        appliance.calendar.refresh_now()
+        appliance.poly.refresh_now()
+        appliance.system.restart("room-kiosk.service", min_interval=2.0, reason="safe reset")
+        return ok(
+            detail="Settings reset to defaults. The calendar link, room name and "
+            "admin PIN were kept.",
+            changed=len(changed),
+        )
+
+    # -- settings --------------------------------------------------------
+    @app.route("/api/settings", methods=["GET"])
+    @require_admin
+    def api_settings_get():
+        return jsonify(
+            {
+                "values": config.as_dict(redact=True),
+                "advisories": advisories(config.as_dict()),
+                "env_locked": config.env_locked_keys(),
+                "secret_keys": sorted(SECRET_KEYS),
+                "warnings": list(config.warnings),
+                "groups": [
+                    {
+                        "id": gid,
+                        "title": title,
+                        "help": help_text,
+                        "fields": [
+                            {
+                                "key": f.key,
+                                "type": f.type,
+                                "label": f.label,
+                                "help": f.help,
+                                "choices": list(f.choices),
+                                "advanced": f.advanced,
+                                "secret": f.secret,
+                                "placeholder": f.placeholder,
+                                "min": f.minimum,
+                                "max": f.maximum,
+                            }
+                            for f in fields
+                        ],
+                    }
+                    for gid, title, help_text, fields in grouped_fields()
+                ],
+            }
+        )
+
+    @app.route("/api/settings", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_settings_post():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return fail("Expected a JSON object of settings.")
+
+        # A redacted secret sent back unchanged must not overwrite the real one.
+        pairs = {
+            key: value
+            for key, value in payload.items()
+            if not (key in SECRET_KEYS and str(value) == "********")
+        }
+        unknown = sorted(set(pairs) - set(FIELDS_BY_KEY))
+        if unknown:
+            return fail(f"Unknown settings: {', '.join(unknown[:5])}")
+
+        changed, errors = config.update(pairs)
+        if errors:
+            return jsonify({"ok": False, "errors": errors}), 422
+
+        units = config.restart_units_for_changes(changed)
+        restarted = [
+            unit
+            for unit in units
+            if appliance.system.restart(unit, min_interval=2.0, reason="settings changed")
+        ]
+        needs_backend_restart = "room-dashboard.service" in units
+
+        return ok(
+            changed=sorted(changed),
+            restarted=restarted,
+            needs_backend_restart=needs_backend_restart,
+            advisories=advisories(config.as_dict()),
+            detail=_describe_save(changed, restarted, needs_backend_restart),
+        )
+
+    @app.route("/api/settings/reset", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_settings_reset():
+        payload = request.get_json(silent=True) or {}
+        keep_calendar = bool(payload.get("keep_calendar", True))
+        keep = ("CALENDAR_ICS_URL", "CALENDAR_SOURCE", "ADMIN_PIN") if keep_calendar else ()
+        changed = config.reset_to_defaults(keep=keep)
+        return ok(changed=len(changed), detail="Every setting is back to its default.")
+
+    def _describe_save(changed: set[str], restarted: list[str], backend: bool) -> str:
+        if not changed:
+            return "Nothing changed."
+        parts = [f"Saved {len(changed)} setting{'s' if len(changed) != 1 else ''}."]
+        if restarted:
+            parts.append("Applied straight away.")
+        if backend:
+            parts.append("Restart the room software for the new port to take effect.")
+        return " ".join(parts)
+
+    # -- backgrounds -----------------------------------------------------
+    @app.route("/api/backgrounds", methods=["GET"])
+    @require_admin
+    def api_backgrounds():
+        payload = appliance.backgrounds.payload()
+        payload["ok"] = True
+        payload["uploads_allowed"] = config.bool_("BACKGROUND_ALLOW_UPLOADS")
+        payload["mode"] = config.str_("BACKGROUND_MODE")
+        return jsonify(payload)
+
+    @app.route("/api/backgrounds", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_backgrounds_upload():
+        if not config.bool_("BACKGROUND_ALLOW_UPLOADS"):
+            return fail("Image uploads are switched off in Settings.", 409)
+        uploaded = request.files.get("image")
+        if uploaded is None:
+            return fail("No image was attached.")
+        image, error = appliance.backgrounds.save(
+            uploaded.stream, declared_name=uploaded.filename or ""
+        )
+        if image is None:
+            return fail(error)
+        # Uploading the first image is a clear signal the slideshow is wanted.
+        if config.str_("BACKGROUND_MODE") == "theme" and appliance.backgrounds.count() == 1:
+            config.update({"BACKGROUND_MODE": "slideshow"})
+        return ok(image=image.to_dict(), count=appliance.backgrounds.count())
+
+    @app.route("/api/backgrounds/<name>", methods=["DELETE"])
+    @require_admin
+    @require_csrf
+    def api_backgrounds_delete(name: str):
+        if appliance.backgrounds.delete(name):
+            return ok(count=appliance.backgrounds.count())
+        return fail("That image is not in the slideshow.", 404)
+
+    @app.route("/media/backgrounds/<name>")
+    def media_background(name: str):
+        path = appliance.backgrounds.resolve(name)
+        if path is None:
+            return "Not found", 404
+        response = make_response(send_file(path, conditional=True))
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
+
+    # -- diagnostics -----------------------------------------------------
+    @app.route("/api/diagnostics")
+    @require_admin
+    def api_diagnostics():
+        return jsonify(
+            {
+                "ok": True,
+                "poly": appliance.poly.inventory(),
+                "remote": {
+                    "status": appliance.remote.status(),
+                    "mappings": appliance.remote.mappings(),
+                    "devices": appliance.remote.list_devices(),
+                    "actions": list(ACTIONS),
+                },
+                "calendar": appliance.calendar.status(),
+                "browser": appliance.browser.status(),
+                "airplay": appliance.airplay.status(),
+                "units": {u: appliance.system.unit_state(u) for u in MANAGED_UNITS},
+                "join_flows": {
+                    pid: {
+                        "priority_texts": list(flow.priority_texts),
+                        "asks_for_name": flow.asks_for_name,
+                        "notes": flow.notes,
+                    }
+                    for pid, flow in PROVIDER_FLOWS.items()
+                },
+                "config_file": str(config.file),
+                "paths": {
+                    "var": str(paths.VAR_DIR),
+                    "profile": str(paths.CHROMIUM_PROFILE),
+                    "cache": str(paths.CALENDAR_CACHE),
+                },
+                "modes": list(MODES),
+            }
+        )
+
+    @app.route("/api/diagnostics/capture-remote", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_capture_remote():
+        payload = request.get_json(silent=True) or {}
+        try:
+            seconds = float(payload.get("seconds", 10))
+        except (TypeError, ValueError):
+            seconds = 10.0
+        return jsonify(appliance.remote.capture_keys(seconds))
+
+    @app.route("/api/logs")
+    @require_admin
+    def api_logs():
+        unit = request.args.get("unit", "").strip()
+        try:
+            lines = int(request.args.get("lines", 200))
+        except ValueError:
+            lines = 200
+        return jsonify({"ok": True, "unit": unit or "all", "text": appliance.system.journal(unit, lines)})
+
+    # -- internal (helper scripts) ---------------------------------------
+    @app.route("/api/internal/airplay", methods=["POST"])
+    @require_internal
+    def api_internal_airplay():
+        payload = request.get_json(silent=True) or {}
+        event = str(payload.get("event") or "")
+        client = str(payload.get("client") or "")
+        return jsonify(appliance.airplay.handle_event(event, client=client))
+
+    @app.route("/api/internal/action", methods=["POST"])
+    @require_internal
+    def api_internal_action():
+        """Remote-control button presses from room-remote.service."""
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in ACTIONS:
+            return fail(f"Unknown action: {action}")
+        result = appliance.room.dispatch_action(action)
+        return jsonify({"ok": bool(result.get("ok")), **result})
+
+    @app.route("/api/internal/token-check")
+    @require_internal
+    def api_internal_token_check():
+        return ok(detail="Token accepted.")
+
+    # -- errors ----------------------------------------------------------
+    @app.errorhandler(404)
+    def not_found(_error):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "No such endpoint."}), 404
+        if request.path.startswith(("/media/", "/static/")):
+            return "Not found", 404
+        # A stray URL on the kiosk (a mistyped link, a restored session) should
+        # land back on the room screen rather than an error page.
+        return redirect(url_for("index"))
+
+    @app.errorhandler(413)
+    def too_large(_error):
+        return jsonify({"ok": False, "error": "That file is too large."}), 413
+
+    @app.errorhandler(500)
+    def server_error(error):
+        log.exception("web.unhandled_error", extra={"fields": {"path": request.path}})
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "error": "The room software hit an error."}), 500
+        return render_template("error.html", **template_context()), 500
+
+
+def _schedule_self_restart(appliance: RoomAppliance) -> None:
+    """Exit shortly, so systemd restarts the backend cleanly."""
+
+    def _exit() -> None:
+        import time
+
+        time.sleep(1.0)
+        log_event(log, logging.WARNING, "application.restart_requested")
+        appliance.stop()
+        os._exit(0)  # noqa: SLF001 - deliberate: systemd will restart us
+
+    threading.Thread(target=_exit, name="self-restart", daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="room-appliance",
+        description="Meeting-room appliance backend and dashboard.",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Development mode: mock hardware, LAN access, auto-reload templates.",
+    )
+    parser.add_argument("--host", default=None, help="Override the listen address.")
+    parser.add_argument("--port", type=int, default=None, help="Override the port.")
+    parser.add_argument(
+        "--print-internal-token",
+        action="store_true",
+        help="Print the token helper scripts use, then exit.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.print_internal_token:
+        print(internal_token())
+        return 0
+
+    paths.ensure_dirs()
+    config = get_config()
+
+    if args.dev:
+        # Development overrides are applied in memory only, never written to
+        # config.yaml, so a developer cannot accidentally ship them to a room.
+        overrides: dict[str, object] = {
+            "DEV_MODE": True,
+            "KIOSK_ENABLED": False,
+            "LOG_LEVEL": "DEBUG",
+        }
+        # Only invent meetings when there is no real feed to read.
+        if not config.str_("CALENDAR_ICS_URL"):
+            overrides["CALENDAR_SOURCE"] = "mock"
+        config.update(overrides, persist=False)
+
+    app = create_app(config)
+    appliance: RoomAppliance = app.config["ROOM_APPLIANCE"]
+
+    def shutdown(signum, _frame):  # pragma: no cover - signal path
+        log_event(log, logging.INFO, "application.signal", signal=int(signum))
+        appliance.stop()
+        sys.exit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, shutdown)
+        except (ValueError, OSError):
+            pass
+
+    host = args.host or effective_bind_host(config)
+    port = args.port or config.int_("DASHBOARD_PORT")
+
+    log_event(
+        log,
+        logging.INFO,
+        "web.listening",
+        host=host,
+        port=port,
+        lan_admin=config.bool_("ADMIN_LAN_ACCESS"),
+    )
+    # threaded=True: the dashboard polls while background threads work.
+    app.run(host=host, port=port, threaded=True, use_reloader=False, debug=False)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

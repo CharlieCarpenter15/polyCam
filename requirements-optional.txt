@@ -1,0 +1,4 @@
+# Optional: Poly remote / HID controller support.
+# Needs apt packages: python3-dev, build-essential (installed by scripts/install.sh).
+# The appliance runs fine without this: remote_service degrades to a no-op.
+evdev==1.7.1
