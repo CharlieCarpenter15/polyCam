@@ -383,6 +383,8 @@ fetch_model() {
     info "It comes from $url"
     info "Check the room's internet connection and any proxy, then run this"
     info "again — nothing already installed will be downloaded twice."
+    info "It can also be staged by hand: download it on a machine that can"
+    info "reach that address and copy it into $MODELS_DIR"
     fail
     return 1
   fi
@@ -534,10 +536,11 @@ whisper_already_installed() {
   return 1
 }
 
-# The URL of a prebuilt release for this architecture, or nothing. Upstream has
-# published Windows builds only for years, so this normally finds nothing and
-# we build — but it costs one request to find out, and the day a Linux ARM64
-# build appears this picks it up without a change here.
+# The URL of a prebuilt release for this architecture, or nothing — which also
+# means "nothing, and the release list could not be read", because the answer is
+# the same either way: build it. Upstream has published Windows builds only for
+# years, so this normally finds nothing; it costs one request to find out, and
+# the day a Linux ARM64 build appears this picks it up without a change here.
 whisper_prebuilt_url() {
   local arch release
   arch="$(uname -m 2>/dev/null || true)"
@@ -595,9 +598,16 @@ whisper_build_dependencies() {
     have "$tool" || missing+=("$tool")
   done
   [ "${#missing[@]}" -eq 0 ] && return 0
-  if have apt-get; then
-    info "installing the build tools (${missing[*]}) — this needs sudo"
-    sudo apt-get install -y -qq git cmake build-essential > /dev/null 2>&1
+  # systemd/room-minutes-models.service runs this with nobody watching, so only
+  # reach for sudo when it will not sit there waiting for a password.
+  if have apt-get && have sudo; then
+    if sudo -n true 2>/dev/null || [ -t 0 ]; then
+      info "installing the build tools (${missing[*]}) — this needs sudo"
+      sudo apt-get install -y -qq git cmake build-essential > /dev/null 2>&1
+    else
+      info "the build tools are missing and sudo would need a password that"
+      info "there is nobody here to type"
+    fi
   fi
   missing=()
   for tool in git cmake make c++; do
@@ -717,7 +727,7 @@ install_whisper_binary() {
     fi
     warn "The prebuilt release could not be used; building instead."
   else
-    info "no prebuilt whisper.cpp for $(uname -m) Linux is published, so it is built here"
+    info "no prebuilt whisper.cpp for $(uname -m) Linux was found, so it is built here"
   fi
 
   if whisper_from_source; then
@@ -873,31 +883,48 @@ if [ "$DO_MODELS" -eq 1 ]; then
     YUNET="face_detection_yunet_2023mar.onnx"
   fi
 
-  fetch_model "$YUNET" \
-    "$ZOO_URL/face_detection_yunet/$YUNET" \
-    150000 500000 onnx \
-    "finding the faces in a frame (YuNet, MIT licence)"
-
-  fetch_model "face_recognition_sface_2021dec.onnx" \
-    "$ZOO_URL/face_recognition_sface/face_recognition_sface_2021dec.onnx" \
-    30000000 50000000 onnx \
-    "turning a face into numbers (SFace, Apache-2.0 licence)"
-
-  fetch_model "nemo_en_titanet_small.onnx" \
-    "$SHERPA_URL/nemo_en_titanet_small.onnx" \
-    30000000 55000000 onnx \
-    "putting a name to a voice (TitaNet-small)"
-
+  # Everything to fetch, as NAME|URL|MIN|MAX|KIND|PURPOSE, so the disk can be
+  # measured against the whole job before a single byte is written.
+  WANTED=(
+    "$YUNET|$ZOO_URL/face_detection_yunet/$YUNET|150000|500000|onnx|finding the faces in a frame (YuNet, MIT licence)"
+    "face_recognition_sface_2021dec.onnx|$ZOO_URL/face_recognition_sface/face_recognition_sface_2021dec.onnx|30000000|50000000|onnx|turning a face into numbers (SFace, Apache-2.0 licence)"
+    "nemo_en_titanet_small.onnx|$SHERPA_URL/nemo_en_titanet_small.onnx|30000000|55000000|onnx|putting a name to a voice (TitaNet-small)"
+  )
   if [ -n "$WHISPER_SIZE" ]; then
     case "$WHISPER_SIZE" in
       tiny.en) GGML_MIN=50000000; GGML_MAX=110000000 ;;
       base.en) GGML_MIN=100000000; GGML_MAX=220000000 ;;
       *) GGML_MIN=350000000; GGML_MAX=650000000 ;;
     esac
-    fetch_model "ggml-$WHISPER_SIZE.bin" \
-      "$GGML_URL/ggml-$WHISPER_SIZE.bin" \
-      "$GGML_MIN" "$GGML_MAX" ggml \
-      "turning speech into text (whisper.cpp $WHISPER_SIZE)"
+    WANTED+=(
+      "ggml-$WHISPER_SIZE.bin|$GGML_URL/ggml-$WHISPER_SIZE.bin|$GGML_MIN|$GGML_MAX|ggml|turning speech into text (whisper.cpp $WHISPER_SIZE)"
+    )
+  fi
+
+  # Refusing halfway through a 400 MB download and leaving the room with two
+  # of the four files it needs helps nobody, so the whole job is costed first.
+  NEEDED_MB=0
+  for WANT in "${WANTED[@]}"; do
+    IFS='|' read -r M_NAME M_URL M_MIN M_MAX M_KIND M_PURPOSE <<< "$WANT"
+    if [ -f "$MODELS_DIR/$M_NAME" ] && [ "$FORCE" -eq 0 ]; then
+      continue
+    fi
+    NEEDED_MB=$((NEEDED_MB + M_MAX / 1048576))
+  done
+
+  ENOUGH_ROOM=1
+  if [ "$NEEDED_MB" -gt 0 ]; then
+    require_space "$MODELS_DIR" "$((NEEDED_MB + 64))" "the model files" || {
+      ENOUGH_ROOM=0
+      fail
+    }
+  fi
+
+  if [ "$ENOUGH_ROOM" -eq 1 ]; then
+    for WANT in "${WANTED[@]}"; do
+      IFS='|' read -r M_NAME M_URL M_MIN M_MAX M_KIND M_PURPOSE <<< "$WANT"
+      fetch_model "$M_NAME" "$M_URL" "$M_MIN" "$M_MAX" "$M_KIND" "$M_PURPOSE"
+    done
   fi
 
   fix_ownership "$MODELS_DIR" "$MANIFEST"

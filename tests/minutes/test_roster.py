@@ -74,9 +74,16 @@ class FakeBrowser:
         install=True,
         clicked="Turn on live captions",
         panel=None,
+        meeting_in_top=True,
     ):
         self.drains = list(drains)
         self.install = install
+        #: False for a page whose meeting stage is a frame of its own, on its
+        #: own origin: the top frame can see none of it, and only the walk
+        #: through the frames finds anything at all.
+        self.meeting_in_top = meeting_in_top
+        #: Which scripts went through the frame-walking door.
+        self.walked: list[str] = []
         self.clicked = clicked
         #: What the participant-panel pass finds. The default is a meeting with
         #: the panel shut and a control to open it.
@@ -94,16 +101,60 @@ class FakeBrowser:
         self.kinds: list[str] = []
 
     def read_meeting_page(self, script, *, timeout=6.0, user_gesture=False):
+        self._record(script, user_gesture)
+        return self._answer(script, top_frame=True)
+
+    def read_meeting_frames(
+        self, script, *, useful=None, timeout=6.0, user_gesture=False
+    ):
+        """The door that looks inside the page's frames.
+
+        One pass, whichever frame ends up answering it — so everything the
+        tests count stays counted once. The top frame is asked first and its
+        answer stands unless ``useful`` rejects it, which is the contract
+        ``cdp.evaluate_in_frames`` implements for real.
+        """
+        self._record(script, user_gesture)
+        self.walked.append(script_kind(script))
+        top = self._answer(script, top_frame=True)
+        if useful is None or useful(top):
+            return top
+        # Nothing useful anywhere means the top frame's answer stands, which is
+        # what keeps "the observer is gone" reaching Python as "the observer is
+        # gone" rather than as silence.
+        other = self._answer(script, top_frame=False)
+        return other if useful(other) else top
+
+    def _record(self, script, user_gesture) -> None:
         self.scripts.append(script)
         self.gestures.append(bool(user_gesture))
+        self.kinds.append(script_kind(script))
+
+    def _answer(self, script, *, top_frame: bool):
+        """What one frame of the page says. The stage knows; the shell may not."""
         kind = script_kind(script)
-        self.kinds.append(kind)
+        # Exactly one frame has the meeting in it. The other one knows nothing,
+        # whichever of the two that is.
+        blind = top_frame != self.meeting_in_top
         if kind == "install":
-            return {"ok": True, "state": "installed"} if self.install else None
+            if not self.install:
+                return None
+            if blind and "var REQUIRE_SURFACE = true;" in script:
+                # An observer offered to a frame with no meeting in it refuses,
+                # leaving nothing behind, so the next frame can be tried.
+                return {"ok": False, "state": "no-surface",
+                        "reason": "no-provider-surface"}
+            return {"ok": True, "state": "installed"}
         if kind == "click":
+            if blind:
+                return {"clicked": None, "filled_name": False, "waiting": ""}
             return {"clicked": self.clicked, "filled_name": False, "waiting": ""}
         if kind == "panel":
+            if blind:
+                return {"open": False, "clicked": None, "candidates": 3}
             return self.panel
+        if blind:
+            return {"ok": False, "installed": False, "reason": "not-installed"}
         if not self.drains:
             return None
         entry = self.drains.pop(0)

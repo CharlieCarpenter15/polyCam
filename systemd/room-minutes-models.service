@@ -1,0 +1,37 @@
+# Room appliance: fetch the model files the meeting-minutes recognisers need.
+#
+# One-shot, and deliberately not enabled: nothing starts this at boot. It is
+# run on demand — from the Minutes page, or by hand — because it downloads
+# several hundred megabytes and an appliance that reaches out to the internet
+# on its own is a surprise. Somebody asks for it, and then it happens.
+#
+# It exists as a unit rather than as a subprocess of the web server for the
+# reason every long job on this appliance is a unit: the download outlives the
+# request that started it, survives the backend being restarted underneath it,
+# and leaves its output in the journal where an engineer can read it.
+
+[Unit]
+Description=Meeting minutes: download the speech, face and voice models
+Documentation=file://__ROOM_DIR__/docs/meeting-minutes.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__ROOM_DIR__
+# Not --quiet: this is the only record of a download that takes minutes and
+# happens out of sight, so the journal is where somebody looks to find out
+# what happened. `journalctl --user -u room-minutes-models`.
+ExecStart=__ROOM_DIR__/scripts/install-minutes.sh --models-only
+
+# Generous, because this is hundreds of megabytes over whatever connection the
+# room happens to have. Well short of forever, because a stalled download
+# should end as a failure somebody can see rather than a unit that never
+# finishes.
+TimeoutStartSec=3600
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-minutes-models

@@ -733,6 +733,61 @@
       });
   }
 
+  function mb(bytes) {
+    var n = Number(bytes) || 0;
+    if (!n) return "";
+    return n < 1048576 ? Math.round(n / 1024) + " kB" : Math.round(n / 1048576) + " MB";
+  }
+
+  function renderModels(report) {
+    var files = (report && report.files) || [];
+    $("models-list").innerHTML = files.map(function (file) {
+      var here = !!file.present;
+      var size = mb(here ? file.bytes : file.expected_bytes);
+      return '<li class="mn-model">' +
+        '<span class="mn-model-name">' + R.escapeHtml(file.file || "") + "</span>" +
+        '<span class="mn-model-what">' + R.escapeHtml(file.purpose || "") + "</span>" +
+        '<span class="mn-model-size">' + R.escapeHtml(size) + "</span>" +
+        '<span class="' + (here ? "mn-model-here" : "mn-model-missing") + '">' +
+        (here ? "here" : "missing") + "</span></li>";
+    }).join("");
+
+    var missing = Number(report && report.missing) || 0;
+    var button = $("models-install");
+    button.textContent = missing
+      ? "Download the " + plural(missing, "missing model", "missing models")
+      : "Models are all here";
+    button.disabled = !missing || !!(report && report.downloading);
+    if (report && report.downloading) {
+      button.textContent = "Downloading…";
+      $("models-result").textContent =
+        "Downloading. It keeps going even if you leave this page.";
+    }
+  }
+
+  function loadModels() {
+    return R.get("/api/minutes/models")
+      .then(function (data) { renderModels(data.models); })
+      .catch(function () { $("models-list").innerHTML = ""; });
+  }
+
+  function installModels(button) {
+    R.withButton(button, function () { return R.post("/api/minutes/models/install"); })
+      .then(function (data) {
+        $("models-result").textContent = data.detail || "";
+        // The unit outlives this request, so keep asking until the files land.
+        var tries = 0;
+        var poll = setInterval(function () {
+          tries += 1;
+          if (tries > 120) { clearInterval(poll); return; }
+          loadModels();
+        }, 5000);
+      })
+      .catch(function (error) {
+        $("models-result").textContent = error.message || "The download could not be started.";
+      });
+  }
+
   function probeWindow(button) {
     $("probe-result").textContent = "Reading the meeting window…";
     R.withButton(button, function () { return R.post("/api/minutes/probe"); })
@@ -810,11 +865,13 @@
     $("test-email-send").addEventListener("click", function () { sendTestEmail(this); });
     $("look-now").addEventListener("click", function () { lookAtRoom(this); });
     $("probe-window").addEventListener("click", function () { probeWindow(this); });
+    $("models-install").addEventListener("click", function () { installModels(this); });
   }
 
   function init() {
     wire();
     loadStatus();
+    loadModels();
     loadPeople().catch(function () {
       $("people-empty").textContent = "The people list could not be read.";
     });

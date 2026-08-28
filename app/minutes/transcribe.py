@@ -775,6 +775,40 @@ def parse_vosk_result(raw: Any) -> list[Utterance]:
 # ---------------------------------------------------------------------------
 
 
+def model_report(config: Any) -> list[dict[str, Any]]:
+    """The speech model, whether it is here, and what it is for.
+
+    One row, for whichever local engine this appliance would actually use. A
+    list of every model every engine could want would be a list of things not
+    to install.
+    """
+    found = whisper_model(config)
+    if found is None and vosk_model(config) is not None:
+        found = vosk_model(config)
+    return [
+        {
+            "role": "speech",
+            "purpose": "writing down what was said",
+            "file": found.name if found is not None else "ggml-base.en.bin",
+            "present": found is not None,
+            "path": str(found) if found is not None else "",
+            "bytes": _size_of(found),
+            "expected_bytes": 148_000_000,
+            "directory": str(paths.MODELS_DIR),
+            "url": "https://huggingface.co/ggerganov/whisper.cpp",
+        }
+    ]
+
+
+def _size_of(path: Path | None) -> int:
+    if path is None:
+        return 0
+    try:
+        return sum(p.stat().st_size for p in path.rglob("*")) if path.is_dir() else path.stat().st_size
+    except OSError:
+        return 0
+
+
 def whisper_model(config: Any) -> Path | None:
     """The ggml model to use: the configured one, else the newest downloaded."""
     named = _text(config, "MINUTES_STT_MODEL")

@@ -712,6 +712,32 @@ def api_look():
     return ok(look=look, people=people, detail=detail)
 
 
+@minutes_bp.route("/api/minutes/models")
+@require_admin
+@needs_minutes
+def api_models():
+    """Which model files are here, which are missing, and how big they are."""
+    return ok(models=_service().models_report())
+
+
+@minutes_bp.route("/api/minutes/models/install", methods=["POST"])
+@require_admin
+@require_csrf
+@needs_minutes
+def api_models_install():
+    """Fetch the missing model files, because an administrator asked.
+
+    The appliance never does this on its own. A room appliance that reaches out
+    to the internet unprompted is a surprise, and several hundred megabytes
+    arriving over somebody's office connection is a rude one. Pressed by a
+    person who can see what it will fetch, it is simply a request.
+    """
+    started, detail = _service().install_models()
+    if not started:
+        return fail(detail, 409)
+    return ok(detail=detail)
+
+
 @minutes_bp.route("/api/minutes/probe", methods=["POST"])
 @require_admin
 @require_csrf

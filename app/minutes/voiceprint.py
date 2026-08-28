@@ -143,10 +143,15 @@ def available(config: Any) -> tuple[bool, str]:
     )
 
 
-def _titanet_model() -> Path | None:
-    """The speaker-embedding ONNX file, when one has been installed."""
-    if not deps.available("sherpa_onnx"):
-        return None
+def _speaker_model_file() -> Path | None:
+    """The speaker-embedding ONNX file on disk, whatever else is installed.
+
+    Deliberately says nothing about whether the runtime that loads it is
+    installed. "Is the file here" and "can we use it" are different questions,
+    and answering the first with the second is how somebody who downloaded the
+    models before the packages gets told the files are missing and downloads
+    forty megabytes a second time.
+    """
     try:
         candidates = sorted(paths.MODELS_DIR.glob("*.onnx"))
     except OSError:
@@ -156,6 +161,13 @@ def _titanet_model() -> Path | None:
         if "titanet" in name or "speaker" in name or "ecapa" in name:
             return path
     return None
+
+
+def _titanet_model() -> Path | None:
+    """The speaker-embedding model, when it can actually be used."""
+    if not deps.available("sherpa_onnx"):
+        return None
+    return _speaker_model_file()
 
 
 def _vad_is_reliable() -> bool:
@@ -185,6 +197,30 @@ def _vosk_models() -> tuple[Path, Path] | None:
     if speaker is None or speech is None:
         return None
     return speech, speaker
+
+
+def model_report() -> list[dict[str, Any]]:
+    """The speaker model, whether it is here, and what it buys you."""
+    found = _speaker_model_file()
+    size = 0
+    if found is not None:
+        try:
+            size = found.stat().st_size
+        except OSError:
+            size = 0
+    return [
+        {
+            "role": "voice",
+            "purpose": "putting a name to a voice in the room",
+            "file": found.name if found is not None else "nemo_en_titanet_small.onnx",
+            "present": found is not None,
+            "path": str(found) if found is not None else "",
+            "bytes": size,
+            "expected_bytes": 40_300_000,
+            "directory": str(paths.MODELS_DIR),
+            "url": "https://github.com/k2-fsa/sherpa-onnx/releases",
+        }
+    ]
 
 
 def model_name() -> str:

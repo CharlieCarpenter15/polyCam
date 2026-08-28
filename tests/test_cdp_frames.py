@@ -559,3 +559,76 @@ class TestPageFrame:
     def test_a_frame_with_no_parent_is_the_top_one(self):
         assert PageFrame("top").is_top
         assert not PageFrame("stage", parent_id="top").is_top
+
+
+# ---------------------------------------------------------------------------
+# The door the appliance opens onto a meeting
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def meeting_browser(mock_config, devtools):
+    """A browser service with a meeting on screen and the fake DevTools in it."""
+    from app.browser_service import TARGET_MEETING, BrowserService
+    from app.system_service import SystemService
+
+    service = BrowserService(mock_config, SystemService(mock_config))
+    service._cdp = devtools
+    service._target = TARGET_MEETING
+    return service
+
+
+class TestReadMeetingFrames:
+    def test_a_reply_from_a_child_frame_comes_back_decoded(
+        self, meeting_browser, chrome, devtools
+    ):
+        """Teams' stage on its own origin: the top frame knows nothing."""
+        _worlds(devtools, chrome)
+        chrome.answers = {
+            None: json.dumps({"participants": []}),
+            chrome.world_for("stage"): json.dumps({"participants": ["Sam Okafor"]}),
+        }
+        reply = meeting_browser.read_meeting_frames("probe()", useful=has_names)
+        assert reply == {"participants": ["Sam Okafor"]}
+
+    def test_the_predicate_is_asked_about_the_decoded_reply(
+        self, meeting_browser, chrome, devtools
+    ):
+        """A caller writes "does this name anybody?", not JSON archaeology."""
+        seen = []
+        _worlds(devtools, chrome)
+        chrome.answers = {
+            None: json.dumps({"participants": []}),
+            chrome.world_for("stage"): json.dumps({"participants": ["Sam Okafor"]}),
+        }
+
+        def watching(reply):
+            seen.append(reply)
+            return has_names(reply)
+
+        meeting_browser.read_meeting_frames("probe()", useful=watching)
+        assert all(isinstance(reply, dict) for reply in seen), seen
+
+    def test_no_meeting_on_screen_means_no_answer_and_no_commands(
+        self, meeting_browser, chrome
+    ):
+        from app.browser_service import TARGET_DASHBOARD
+
+        meeting_browser._target = TARGET_DASHBOARD
+        assert meeting_browser.read_meeting_frames("probe()") is None
+        assert chrome.calls == []
+
+    def test_a_failure_is_no_answer_rather_than_an_exception(
+        self, meeting_browser, chrome, monkeypatch
+    ):
+        monkeypatch.delattr(FakeChromium, "on_Page_getFrameTree")
+        chrome.answers = {None: Refusal("Cannot access the page")}
+        assert meeting_browser.read_meeting_frames("probe()") is None
+
+    def test_it_reads_without_claiming_a_user_gesture(
+        self, meeting_browser, chrome
+    ):
+        """Same rule as the door beside it: reading is not interacting."""
+        chrome.answers = {None: json.dumps({"participants": ["Priya Nair"]})}
+        meeting_browser.read_meeting_frames("probe()")
+        assert chrome.sent("Runtime.evaluate")[0]["userGesture"] is False

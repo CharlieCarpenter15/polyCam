@@ -25,7 +25,7 @@ opencv-python-headless==5.0.0.93
 # -- Recognising voices -----------------------------------------------------
 # sherpa-onnx bundles its own ONNX runtime, so this is the whole dependency:
 # no PyTorch, no compiler. It needs a speaker-embedding model on disk.
-sherpa-onnx==1.12.14
+sherpa-onnx==1.12.40
 
 # Splitting recorded audio into speech turns. Note the "-wheels" suffix: plain
 # webrtcvad publishes no ARM wheel and would have to be compiled on the Pi. The

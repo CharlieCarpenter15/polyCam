@@ -946,6 +946,7 @@ _OBSERVER_JS = r"""
   var TICK_MS = __TICK_MS__;
   var HEARTBEAT_MS = __HEARTBEAT_MS__;
   var WANT_CAPTIONS = __CAPTIONS__;
+  var REQUIRE_SURFACE = __REQUIRE_SURFACE__;
 
   var live = window.__pcRoster;
   if (live && live.v === VERSION && live.run === RUN && !live.gone) {
@@ -953,6 +954,28 @@ _OBSERVER_JS = r"""
     // start a second timer, and must not throw away what has been collected.
     live.at = Date.now();
     return JSON.stringify({ ok: true, state: "already" });
+  }
+
+  // Settle only where there is a meeting to watch. A page whose stage is a
+  // frame of its own — a Teams tenant on *.cloud.microsoft, where the shell
+  // and the stage are different origins and so different processes — offers
+  // this script to each frame in turn, and an observer that took up residence
+  // in the shell would watch an empty room for the whole meeting without ever
+  // saying so. Refusing costs nothing and leaves nothing behind: no state is
+  // kept and no timer is started, so the caller is free to try the next frame.
+  // Off unless asked for, because the caller falls back to installing here
+  // anyway when no frame owns up.
+  if (REQUIRE_SURFACE) {
+    var look = null;
+    try { look = probe(); } catch (e) { look = null; }
+    var found = look && (look.ok ||
+                (look.health && (look.health.tiles || look.health.roster)));
+    if (!found) {
+      return JSON.stringify({
+        ok: false, state: "no-surface",
+        reason: (look && look.reason) || "no-provider-surface"
+      });
+    }
   }
   // A leftover from an earlier recording (two meetings back to back in one
   // page) must be torn down rather than inherited, or its captions would be
@@ -1323,7 +1346,12 @@ def build_probe_script(provider_id: str) -> str:
 
 
 def build_install_script(
-    provider_id: str, run_token: str, *, captions: bool = True, tick_ms: int = TICK_MS
+    provider_id: str,
+    run_token: str,
+    *,
+    captions: bool = True,
+    tick_ms: int = TICK_MS,
+    require_surface: bool = False,
 ) -> str:
     """The resident observer for one recording.
 
@@ -1331,12 +1359,19 @@ def build_install_script(
     same token is a no-op that keeps whatever has been collected; running it
     with a different one tears down the previous observer first, so two
     meetings held back to back in the same page can never be mixed together.
+
+    ``require_surface`` makes the observer refuse to settle in a frame with no
+    meeting in it, which is how the sampler offers itself to each frame of a
+    page whose stage is out of process. It is off by default: an observer that
+    installs wherever it is put, and reports honestly that it can see nothing,
+    is what this appliance has always done and is still the right last resort.
     """
     observer = (
         _OBSERVER_JS.replace("__RUN__", json.dumps(str(run_token)))
         .replace("__TICK_MS__", json.dumps(int(tick_ms)))
         .replace("__HEARTBEAT_MS__", json.dumps(int(HEARTBEAT_MS)))
         .replace("__CAPTIONS__", "true" if captions else "false")
+        .replace("__REQUIRE_SURFACE__", "true" if require_surface else "false")
     )
     return "(function () {\n" + _probe_body(provider_id) + observer + "\n})()"
 
@@ -1398,6 +1433,31 @@ def build_roster_panel_script(provider_id: str) -> str:
 # ---------------------------------------------------------------------------
 # What comes back
 # ---------------------------------------------------------------------------
+
+
+def _answered(payload: Any) -> bool:
+    """Did that frame answer, or is the next one worth trying?
+
+    The predicate the frame walk in ``cdp.py`` asks about each frame's reply.
+    Every script this module sends says plainly when it found nothing, and each
+    says it differently: a drain that found no observer says ``installed:
+    false``, an install that would not settle says ``ok: false``, and a press
+    that found no control says ``clicked: null``. Anything else is an answer,
+    and an answer stops the walk.
+
+    Getting this wrong in the generous direction is the expensive mistake: a
+    press reply counted as "nothing" would send the walk on to press the same
+    control in the next frame too.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("installed") is False:
+        return False
+    if payload.get("clicked") or payload.get("open"):
+        return True
+    if payload.get("ok"):
+        return True
+    return bool(payload.get("participants") or payload.get("speaking"))
 
 
 @dataclass
@@ -1710,10 +1770,7 @@ class RosterSampler:
                 # observer here would leave a timer ticking on the room's
                 # television for a meeting that has just ended.
                 return "gone"
-            script = build_install_script(
-                provider, run, captions=self.config.bool_("MINUTES_READ_CAPTIONS")
-            )
-            payload = self._read(script)
+            payload = self._install_observer(provider, run)
             if payload is None:
                 return "gone"
             if not (isinstance(payload, dict) and payload.get("ok")):
@@ -1727,7 +1784,9 @@ class RosterSampler:
                 state=str(payload.get("state") or "installed"),
             )
 
-        payload = self._read(build_drain_script(run, flush=flush))
+        payload = self._read_frames(
+            build_drain_script(run, flush=flush), useful=_answered
+        )
         if payload is None:
             return "gone"
         if not isinstance(payload, dict):
@@ -1754,6 +1813,61 @@ class RosterSampler:
         except Exception:  # pragma: no cover - the door is documented never to
             log.exception("minutes.roster_read_failed")
             return None
+
+    def _read_frames(self, script: str, *, useful, user_gesture: bool = False) -> Any:
+        """``_read``, but willing to look inside the meeting page's own frames.
+
+        The top frame is asked first and its answer is taken whenever it is an
+        answer at all, so a meeting drawn where meetings have always been drawn
+        costs exactly what it cost before: one evaluate, no frame enumeration.
+        The walk only happens once the top frame has stopped knowing anything,
+        which is the situation it exists for — a stage on its own origin, in
+        its own process, that no script in the page around it can see into.
+
+        A browser seam without that door gets the plain read and the top
+        frame's answer. That is not a failure: it is what this module did until
+        now, and several stand-ins are older than the door.
+        """
+        reader = getattr(self.browser, "read_meeting_frames", None)
+        if reader is None:
+            return self._read(script, user_gesture=user_gesture)
+        try:
+            return reader(
+                script, useful=useful, timeout=6.0, user_gesture=user_gesture
+            )
+        except Exception:  # pragma: no cover - the door is documented never to
+            log.exception("minutes.roster_read_failed")
+            return None
+
+    def _install_observer(self, provider: str, run: str) -> Any:
+        """Put the observer in the frame the meeting is in, wherever that is.
+
+        Two attempts, and the second is the one this appliance has always made.
+        First the observer is offered to each frame in turn under a condition —
+        settle only where there is a meeting to watch — which is what keeps it
+        out of the shell of a page whose stage is a frame of its own. If no
+        frame owns up, because the page is still coming up or because this is a
+        provider whose surface we do not recognise, it goes into the top frame
+        and watches from there exactly as before, reporting honestly that it
+        can see nothing until it can.
+
+        Whichever frame takes it, every later drain finds it there: the frame
+        walk asks frames in a fixed order and stops at the first that says it
+        is installed, and ``cdp.py`` hands out one execution context per frame
+        for the life of the page, so "the same frame" really is the same world.
+        """
+        captions = self.config.bool_("MINUTES_READ_CAPTIONS")
+        found = self._read_frames(
+            build_install_script(
+                provider, run, captions=captions, require_surface=True
+            ),
+            useful=_answered,
+        )
+        if found is None:
+            return None
+        if isinstance(found, dict) and found.get("ok"):
+            return found
+        return self._read(build_install_script(provider, run, captions=captions))
 
     def _consume(self, payload: dict[str, Any]) -> str:
         """File one drain's worth of samples and caption lines."""
@@ -1884,7 +1998,9 @@ class RosterSampler:
         through somebody's menus on the room's screen mid-meeting is worse than
         not having captions.
         """
-        payload = self._read(build_captions_script(), user_gesture=True)
+        payload = self._read_frames(
+            build_captions_script(), useful=_answered, user_gesture=True
+        )
         pressed = bool(isinstance(payload, dict) and payload.get("clicked"))
         log_event(
             log, logging.INFO, "minutes.roster_captions_requested", pressed=pressed
@@ -1902,8 +2018,8 @@ class RosterSampler:
         """
         with self._lock:
             provider = self._provider
-        payload = self._read(
-            build_roster_panel_script(provider), user_gesture=True
+        payload = self._read_frames(
+            build_roster_panel_script(provider), useful=_answered, user_gesture=True
         )
         reply = payload if isinstance(payload, dict) else {}
         already = bool(reply.get("open"))

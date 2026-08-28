@@ -69,7 +69,10 @@ class TestShellScripts:
 
     def test_help_output_works_without_a_configuration(self):
         """`--help` must never need a config file, a venv or hardware."""
-        for name in ("install.sh", "dev-run.sh", "uninstall.sh", "diagnose-remote.sh"):
+        for name in (
+            "install.sh", "dev-run.sh", "uninstall.sh", "diagnose-remote.sh",
+            "install-minutes.sh",
+        ):
             script = ROOT / "scripts" / name
             result = subprocess.run(
                 [str(script), "--help"], capture_output=True, text=True, timeout=60
@@ -80,7 +83,7 @@ class TestShellScripts:
 
 class TestSystemdUnits:
     def test_units_were_found(self):
-        assert len(UNIT_FILES) == 7, [p.name for p in UNIT_FILES]
+        assert len(UNIT_FILES) == 8, [p.name for p in UNIT_FILES]
 
     @pytest.mark.parametrize("unit", UNIT_FILES, ids=lambda p: p.name)
     def test_units_parse(self, unit):
@@ -273,3 +276,93 @@ class TestGeneratedDocs:
         reference = (ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
         for field in FIELDS:
             assert f"`{field.key}`" in reference, f"{field.key} is undocumented"
+
+
+class TestStyles:
+    """Guards for the CSS mistakes that fail silently in a browser."""
+
+    def test_every_custom_property_used_is_defined(self):
+        """A `var(--typo)` does not error — it just quietly does nothing.
+
+        A colour falls back to whatever was inherited and a border vanishes
+        altogether, so the page looks *nearly* right and nobody notices for
+        months. Cheaper to catch here.
+        """
+        import re
+
+        sheets = sorted((ROOT / "app" / "static").glob("*.css"))
+        assert sheets, "no stylesheets were found"
+
+        defined = set()
+        for sheet in sheets:
+            defined |= set(
+                re.findall(r"^\s*(--[a-z0-9-]+)\s*:", sheet.read_text(encoding="utf-8"), re.M)
+            )
+
+        for sheet in sheets:
+            used = set(re.findall(r"var\((--[a-z0-9-]+)", sheet.read_text(encoding="utf-8")))
+            undefined = sorted(used - defined)
+            assert not undefined, f"{sheet.name} uses undefined properties: {undefined}"
+
+
+class TestRequirements:
+    """Guards for the pins. A version that does not exist is a broken install."""
+
+    REQUIREMENTS = ("requirements.txt", "requirements-optional.txt",
+                    "requirements-minutes.txt", "requirements-dev.txt")
+
+    def _pins(self, name):
+        import re
+
+        text = (ROOT / name).read_text(encoding="utf-8")
+        return re.findall(r"^([A-Za-z0-9_.\-]+)==([A-Za-z0-9_.\-]+)\s*$", text, re.M)
+
+    @pytest.mark.parametrize("name", REQUIREMENTS)
+    def test_every_dependency_is_pinned_exactly(self, name):
+        """A range would let an appliance installed next year get something else."""
+        import re
+
+        for line in (ROOT / name).read_text(encoding="utf-8").splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line or line.startswith("-r"):
+                continue
+            assert re.match(r"^[A-Za-z0-9_.\-]+==[A-Za-z0-9_.\-]+$", line), (
+                f"{name}: “{line}” is not an exact pin"
+            )
+
+    def test_nothing_is_pinned_twice_across_the_files(self):
+        """Two files disagreeing about a version is a coin toss at install time."""
+        seen = {}
+        for name in self.REQUIREMENTS:
+            for package, version in self._pins(name):
+                key = package.lower()
+                if key in seen:
+                    other_name, other_version = seen[key]
+                    assert other_version == version, (
+                        f"{package} is {version} in {name} but "
+                        f"{other_version} in {other_name}"
+                    )
+                seen[key] = (name, version)
+
+    @pytest.mark.parametrize("name", REQUIREMENTS)
+    def test_the_pinned_versions_exist_on_pypi(self, name):
+        """The bug this caught: a plausible-looking version nobody had published.
+
+        Network-dependent, so it skips rather than failing when there is none —
+        an appliance is built on a bench, not always with the internet.
+        """
+        import json
+        import urllib.error
+        import urllib.request
+
+        for package, version in self._pins(name):
+            url = f"https://pypi.org/pypi/{package}/json"
+            try:
+                with urllib.request.urlopen(url, timeout=20) as response:
+                    payload = json.load(response)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+                pytest.skip("PyPI is not reachable from here")
+            assert payload["releases"].get(version), (
+                f"{name} pins {package}=={version}, which is not published. "
+                f"The latest is {payload['info']['version']}."
+            )

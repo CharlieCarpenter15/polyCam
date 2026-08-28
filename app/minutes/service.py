@@ -38,7 +38,7 @@ from typing import Any
 
 from ..background_service import detect_image_type
 from ..logging_setup import get_logger, log_event
-from ..models import FAIL, OFF, OK, WARN
+from ..models import OFF, OK, WARN
 from ..store import read_json, write_json
 from . import attribute, audio, deps, faces, mailer, paths, roster, summarize, transcribe, voiceprint
 from .people import KIND_FACE, KIND_VOICE, PeopleStore
@@ -108,12 +108,22 @@ class Recording:
 class MinutesService:
     """Records meetings, writes them up, and sends them out."""
 
-    def __init__(self, config: Any, calendar: Any, room: Any, poly: Any, browser: Any) -> None:
+    def __init__(
+        self,
+        config: Any,
+        calendar: Any,
+        room: Any,
+        poly: Any,
+        browser: Any,
+        system: Any = None,
+    ) -> None:
         self.config = config
         self.calendar = calendar
         self.room = room
         self.poly = poly
         self.browser = browser
+        #: Optional: only needed to start the model download on request.
+        self.system = system
 
         self.people = PeopleStore()
 
@@ -307,9 +317,12 @@ class MinutesService:
             capture = recording.recorder.stop() if recording.recorder else None
         except Exception:  # pragma: no cover
             log.exception("minutes.recorder_stop_failed")
-        samples = []
         try:
-            samples = recording.sampler.stop() if recording.sampler else []
+            # The return value is not wanted: the sampler streams its samples
+            # and captions to disk as it goes, so that a meeting interrupted by
+            # a power cut keeps whatever it had. Stopping it is what matters.
+            if recording.sampler:
+                recording.sampler.stop()
         except Exception:  # pragma: no cover
             log.exception("minutes.sampler_stop_failed")
 
@@ -951,6 +964,9 @@ class MinutesService:
         return {
             "session_id": session_id,
             "meta": meta.to_dict(),
+            # Whether the recording itself is still on disk — the same fact the
+            # list shows, so a caller does not have to fetch both to learn it.
+            "has_audio": any(directory.glob("*.wav")),
             "transcript": written.to_dict() if written else None,
             "text": written.render_text() if written else "",
             "speakers": written.speakers() if written else [],
@@ -1028,6 +1044,67 @@ class MinutesService:
             return False, "No such recording."
         self._queue.put(session_id)
         return True, "Queued. It will be written up again in a moment."
+
+    #: The unit that fetches the model files. Not enabled, not started at boot:
+    #: somebody has to ask for it.
+    MODELS_UNIT = "room-minutes-models.service"
+
+    def models_report(self) -> dict[str, Any]:
+        """Every model file this feature can use, and whether it is here.
+
+        The recognisers are useless without their weights and the appliance
+        does not fetch them on its own, so "which files are missing, how big
+        are they and where do they come from" is the first question anybody
+        setting this up has. It used to be answered only by the documentation.
+        """
+        files = list(faces.models_report())
+
+        speech = transcribe.model_report(self.config)
+        if speech:
+            files.extend(speech)
+
+        voice = voiceprint.model_report()
+        if voice:
+            files.extend(voice)
+
+        missing = [row for row in files if not row.get("present")]
+        state = ""
+        try:
+            state = self.system.unit_state(self.MODELS_UNIT) if self.system else ""
+        except Exception:  # pragma: no cover - a unit query must not raise here
+            state = ""
+        return {
+            "files": files,
+            "missing": len(missing),
+            "directory": str(paths.MODELS_DIR),
+            "downloading": state == "activating",
+            "unit_state": state,
+        }
+
+    def install_models(self) -> tuple[bool, str]:
+        """Ask systemd to fetch the model files, and return straight away.
+
+        A unit rather than a subprocess of the web server, for the reason every
+        long job here is a unit: the download outlives the request that started
+        it, survives the backend restarting underneath it, and leaves its
+        output in the journal. The page polls the unit's state afterwards.
+        """
+        if self.system is None:
+            return False, "This appliance cannot start the download itself."
+        state = self.system.unit_state(self.MODELS_UNIT)
+        if state == "activating":
+            return False, "The download is already running."
+        if not self.system.start(self.MODELS_UNIT):
+            return False, (
+                "The download could not be started. Run "
+                "“scripts/install-minutes.sh --models-only” on the Pi instead, "
+                "and see the Checks page for the unit's state."
+            )
+        log_event(log, logging.INFO, "minutes.models_download_started")
+        return True, (
+            "Downloading the models. It is several hundred megabytes, so give it "
+            "a few minutes — this page will say when they have arrived."
+        )
 
     def probe_meeting_window(self) -> dict[str, Any]:
         """Read the meeting window once and report exactly what was found.

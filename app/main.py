@@ -92,7 +92,7 @@ class RoomAppliance:
         # Reads the room's state; never writes to it. Inert unless switched on.
         # Built before the health service so that it can be reported on.
         self.minutes = MinutesService(
-            config, self.calendar, self.room, self.poly, self.browser
+            config, self.calendar, self.room, self.poly, self.browser, self.system
         )
         self.health = HealthService(
             config,

@@ -41,6 +41,7 @@ MANAGED_UNITS = (
     "room-watchdog.timer",
     "room-watchdog.service",
     "room-update.service",
+    "room-minutes-models.service",
 )
 
 

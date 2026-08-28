@@ -1523,11 +1523,13 @@ minutes_render() {
 # the id itself goes to stderr, so the caller can capture the answer.
 minutes_resolve() {
   local prefix="${1:-}" answer
+  # A render that fails has already said why on stderr — a wiring fault, or a
+  # switched-off feature answering 404 — so do not paper over it with a guess.
   if minutes_appliance; then
     answer="$(minutes_get "/api/minutes/sessions?limit=200" |
-              minutes_render resolve - "$prefix" 2>/dev/null)"
+              minutes_render resolve - "$prefix")" || return 1
   else
-    answer="$(minutes_render resolve "$MINUTES_VAR" "$prefix")"
+    answer="$(minutes_render resolve "$MINUTES_VAR" "$prefix")" || return 1
   fi
   case "$answer" in
     "OK "*)
