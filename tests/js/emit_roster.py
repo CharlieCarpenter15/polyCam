@@ -17,6 +17,7 @@ from app.minutes.roster import (
     build_drain_script,
     build_install_script,
     build_probe_script,
+    build_roster_panel_script,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -55,6 +56,17 @@ for provider, filename in (
     build_install_script("teams", RUN_TOKEN, captions=False, tick_ms=TICK_MS),
     encoding="utf-8",
 )
+
+# The same observer, told to settle only where it can see a meeting. This is
+# the one offered to each frame of a page whose stage is out of process, and
+# the thing worth testing is that a frame with no meeting in it is left with
+# no observer and no timer rather than a resident script watching an empty room.
+(HERE / "clicker_roster_install_frame.js").write_text(
+    build_install_script(
+        "teams", RUN_TOKEN, captions=True, tick_ms=TICK_MS, require_surface=True
+    ),
+    encoding="utf-8",
+)
 (HERE / "clicker_roster_drain.js").write_text(
     build_drain_script(RUN_TOKEN), encoding="utf-8"
 )
@@ -69,5 +81,15 @@ for provider, filename in (
 (HERE / "clicker_roster_captions.js").write_text(
     build_captions_script(), encoding="utf-8"
 )
+
+# The one pass that may open the participant list, and may never close it.
+for provider, filename in (
+    ("teams", "clicker_roster_panel.js"),
+    ("meet", "clicker_roster_panel_meet.js"),
+    ("zoom", "clicker_roster_panel_zoom.js"),
+):
+    (HERE / filename).write_text(
+        build_roster_panel_script(provider), encoding="utf-8"
+    )
 
 print(f"wrote roster scripts to {HERE}")

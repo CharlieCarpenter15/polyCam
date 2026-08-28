@@ -75,6 +75,7 @@ class FakeBrowser:
         clicked="Turn on live captions",
         panel=None,
         meeting_in_top=True,
+        surface=True,
     ):
         self.drains = list(drains)
         self.install = install
@@ -82,8 +83,14 @@ class FakeBrowser:
         #: own origin: the top frame can see none of it, and only the walk
         #: through the frames finds anything at all.
         self.meeting_in_top = meeting_in_top
+        #: False for a page with no meeting on it anywhere yet — a pre-join
+        #: screen. No frame will take an observer that insists on a surface.
+        self.surface = surface
         #: Which scripts went through the frame-walking door.
         self.walked: list[str] = []
+        #: One entry per frame asked, True for the top frame. A press that
+        #: reaches the second frame has pressed something twice.
+        self.asked: list[bool] = []
         self.clicked = clicked
         #: What the participant-panel pass finds. The default is a meeting with
         #: the panel shut and a control to open it.
@@ -117,12 +124,19 @@ class FakeBrowser:
         self._record(script, user_gesture)
         self.walked.append(script_kind(script))
         top = self._answer(script, top_frame=True)
+        # ``None`` is not one frame's answer but the page's: the real door
+        # returns it when the evaluate itself failed, and the walk is never
+        # reached. A meeting that has left the screen must stay left.
+        if top is None:
+            return None
         if useful is None or useful(top):
             return top
+        other = self._answer(script, top_frame=False)
+        if other is None:
+            return None
         # Nothing useful anywhere means the top frame's answer stands, which is
         # what keeps "the observer is gone" reaching Python as "the observer is
         # gone" rather than as silence.
-        other = self._answer(script, top_frame=False)
         return other if useful(other) else top
 
     def _record(self, script, user_gesture) -> None:
@@ -133,13 +147,14 @@ class FakeBrowser:
     def _answer(self, script, *, top_frame: bool):
         """What one frame of the page says. The stage knows; the shell may not."""
         kind = script_kind(script)
+        self.asked.append(bool(top_frame))
         # Exactly one frame has the meeting in it. The other one knows nothing,
         # whichever of the two that is.
         blind = top_frame != self.meeting_in_top
         if kind == "install":
             if not self.install:
                 return None
-            if blind and "var REQUIRE_SURFACE = true;" in script:
+            if (blind or not self.surface) and "var REQUIRE_SURFACE = true;" in script:
                 # An observer offered to a frame with no meeting in it refuses,
                 # leaving nothing behind, so the next frame can be tried.
                 return {"ok": False, "state": "no-surface",
@@ -1151,6 +1166,176 @@ class TestOpeningTheParticipantList:
         assert browser.kinds.count("click") == 1
         assert browser.kinds.count("panel") == 1
         assert browser.kinds[:2] == ["click", "panel"]
+
+
+# ---------------------------------------------------------------------------
+# A meeting drawn in a frame of its own
+# ---------------------------------------------------------------------------
+
+
+class TestWhatCountsAsAnAnswer:
+    """``_answered`` is what stops the frame walk. Each script says it its own way."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"ok": False, "installed": False, "reason": "not-installed"},
+            {"ok": True, "installed": False},
+            {"ok": False, "state": "no-surface"},
+            {"clicked": None, "filled_name": False, "waiting": ""},
+            {"open": False, "clicked": None, "candidates": 12},
+            {"ok": False, "participants": [], "speaking": []},
+            None,
+            "not a reply at all",
+        ],
+    )
+    def test_nothing_found_means_try_the_next_frame(self, payload):
+        assert roster._answered(payload) is False
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"ok": True, "installed": True, "participants": []},
+            {"ok": True, "state": "installed"},
+            {"ok": True, "state": "already"},
+            {"clicked": "people"},
+            {"open": True, "clicked": None},
+            {"ok": False, "participants": [{"name": "Priya Nair"}]},
+            {"ok": False, "speaking": ["Priya Nair"]},
+        ],
+    )
+    def test_an_answer_stops_the_walk(self, payload):
+        assert roster._answered(payload) is True
+
+    def test_a_press_that_worked_is_never_offered_to_another_frame(self):
+        """The expensive mistake: the same control pressed twice over."""
+        assert roster._answered({"clicked": "people", "candidates": 3}) is True
+
+
+class TestAMeetingInAFrameOfItsOwn:
+    """The out-of-process stage: nothing in the page around it can see in.
+
+    ``meeting_in_top=False`` is that page — the shell answers every script with
+    "there is nothing here", and only the walk through the frames finds the
+    meeting at all.
+    """
+
+    def test_the_observer_settles_in_the_frame_that_has_the_meeting(
+        self, reading, tmp_path, events
+    ):
+        browser = FakeBrowser(drains=[drain_payload(), None], meeting_in_top=False)
+        run_sampler(reading, browser, tmp_path).stop()
+        assert "minutes.roster_watching" in events.names()
+        assert browser.kinds.count("install") == 1, (
+            "the shell refused it, so there was nothing to fall back from"
+        )
+
+    def test_the_recording_still_gets_its_samples(self, reading, tmp_path):
+        browser = FakeBrowser(
+            drains=[
+                drain_payload(
+                    samples=[{"at": PAGE_NOW, "speaking": ["Priya Nair"], "ok": True}]
+                ),
+                None,
+            ],
+            meeting_in_top=False,
+        )
+        samples = run_sampler(reading, browser, tmp_path).stop()
+        assert [s.speaking for s in samples] == [["Priya Nair"]]
+
+    def test_every_pass_goes_through_the_walking_door(
+        self, reading, tmp_path
+    ):
+        browser = FakeBrowser(drains=[drain_payload(), None], meeting_in_top=False)
+        run_sampler(reading, browser, tmp_path).stop()
+        assert browser.walked.count("install") == 1
+        assert browser.walked.count("drain") >= 1
+
+    def test_the_presses_reach_the_frame_too(self, reading, tmp_path, events):
+        reading.update({"MINUTES_OPEN_ROSTER": True})
+        browser = FakeBrowser(drains=[drain_payload(), None], meeting_in_top=False)
+        run_sampler(reading, browser, tmp_path).stop()
+        assert panel_fields(events)["pressed"] is True
+        assert browser.kinds.count("panel") == 1
+
+    def test_a_page_where_the_meeting_is_where_it_has_always_been_never_walks(
+        self, reading, tmp_path
+    ):
+        """The whole cost argument: a healthy page pays for no second frame."""
+        reading.update(
+            {"MINUTES_TURN_ON_CAPTIONS": True, "MINUTES_OPEN_ROSTER": True}
+        )
+        browser = FakeBrowser(drains=[drain_payload() for _ in range(4)])
+        run_sampler(reading, browser, tmp_path, stop_after=4).stop()
+        assert browser.asked.count(False) == 0, "a second frame was asked for nothing"
+
+
+class TestWhenNoFrameOwnsUp:
+    """A pre-join screen, or a provider whose surface we do not recognise."""
+
+    def test_the_observer_goes_where_it_has_always_gone(
+        self, reading, tmp_path, events
+    ):
+        browser = FakeBrowser(drains=[drain_payload(), None], surface=False)
+        run_sampler(reading, browser, tmp_path).stop()
+        assert browser.kinds.count("install") == 2, (
+            "one offer refused everywhere, then the install this has always done"
+        )
+        assert "minutes.roster_watching" in events.names()
+
+    def test_the_second_install_asks_for_no_surface_at_all(
+        self, reading, tmp_path
+    ):
+        browser = FakeBrowser(drains=[drain_payload(), None], surface=False)
+        run_sampler(reading, browser, tmp_path).stop()
+        installs = [s for s, k in zip(browser.scripts, browser.kinds) if k == "install"]
+        assert "var REQUIRE_SURFACE = true;" in installs[0]
+        assert "var REQUIRE_SURFACE = false;" in installs[1]
+
+    def test_it_still_records_what_it_can_see_from_there(self, reading, tmp_path):
+        browser = FakeBrowser(
+            drains=[
+                drain_payload(
+                    samples=[{"at": PAGE_NOW, "speaking": ["Sam Okafor"], "ok": True}]
+                ),
+                None,
+            ],
+            surface=False,
+        )
+        samples = run_sampler(reading, browser, tmp_path).stop()
+        assert [s.speaking for s in samples] == [["Sam Okafor"]]
+
+    def test_a_meeting_that_is_not_on_screen_is_still_gone(self, reading, tmp_path):
+        """"No answer at all" must not turn into a second install attempt."""
+        browser = FakeBrowser(install=False, surface=False)
+        run_sampler(reading, browser, tmp_path, stop_after=4)
+        assert browser.kinds.count("install") >= 3
+        assert all(
+            "var REQUIRE_SURFACE = true;" in script
+            for script, kind in zip(browser.scripts, browser.kinds)
+            if kind == "install"
+        )
+
+
+class TestAnOlderBrowserSeam:
+    def test_a_stand_in_without_the_new_door_still_works(self, reading, tmp_path):
+        """``read_meeting_frames`` is newer than some of the stand-ins for it."""
+
+        class OnlyTheOldDoor:
+            def __init__(self):
+                self.kinds = []
+
+            def read_meeting_page(self, script, *, timeout=6.0, user_gesture=False):
+                kind = script_kind(script)
+                self.kinds.append(kind)
+                if kind == "install":
+                    return {"ok": True, "state": "installed"}
+                return drain_payload() if kind == "drain" else {"clicked": None}
+
+        browser = OnlyTheOldDoor()
+        sampler = run_sampler(reading, browser, tmp_path, stop_after=3)
+        sampler.stop()
+        assert "install" in browser.kinds and "drain" in browser.kinds
 
 
 # ---------------------------------------------------------------------------

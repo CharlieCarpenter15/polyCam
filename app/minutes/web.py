@@ -67,7 +67,7 @@ from ..web_security import (
     require_admin,
     require_csrf,
 )
-from . import mailer, paths, summarize
+from . import audio, mailer, paths, summarize
 from .people import KINDS
 
 log = get_logger("minutes.web")
@@ -710,6 +710,21 @@ def api_look():
             "to the camera."
         )
     return ok(look=look, people=people, detail=detail)
+
+
+@minutes_bp.route("/api/minutes/devices")
+@require_admin
+@needs_minutes
+def api_devices():
+    """Which microphone and which speaker a recording started now would use.
+
+    Its own route rather than part of the status, because answering it means
+    asking the audio server and the status is polled every few seconds. It is
+    also the question worth asking before trusting any of this: a transcript
+    of the wrong microphone looks exactly like a transcript of the right one
+    until you read it.
+    """
+    return ok(devices=audio.devices(_config()))
 
 
 @minutes_bp.route("/api/minutes/models")

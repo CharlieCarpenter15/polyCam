@@ -407,6 +407,25 @@ class TestEvaluateInFrames:
         assert reply == {"participants": ["Sam Okafor"]}
         assert chrome.world_for("chat") not in chrome.contexts_evaluated()
 
+    def test_the_same_frame_answers_every_pass(self, devtools, chrome):
+        """An observer installed in a frame has to be drained from that frame.
+
+        The roster reader depends on this: it puts a resident script into
+        whichever frame owns the meeting, and every later drain has to reach
+        the same isolated world or it will find nothing and re-install for the
+        length of the meeting.
+        """
+        devtools.frames()
+        answers(top={"participants": []}, stage={"participants": ["Sam Okafor"]})(
+            _worlds(devtools, chrome)
+        )
+        for _ in range(5):
+            devtools.evaluate_in_frames("drain()", useful=has_names)
+        stage = chrome.world_for("stage")
+        assert chrome.contexts_evaluated().count(stage) == 5
+        assert len(chrome.sent("Page.createIsolatedWorld")) == 2, "one world each"
+        assert len(chrome.sent("Page.getFrameTree")) == 1
+
     def test_the_top_frame_is_never_asked_twice(self, devtools, chrome):
         devtools.frames()
         answers(top={"participants": []})(_worlds(devtools, chrome))

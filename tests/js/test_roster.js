@@ -16,8 +16,9 @@
 //
 // emit_roster.py writes clicker_roster_teams.js, clicker_roster_meet.js,
 // clicker_roster_zoom.js, clicker_roster_generic.js, the observer and drain
-// pair, and clicker_roster_captions.js. All are generated, and all are already
-// ignored by the repository's tests/js/clicker_*.js rule.
+// pair, clicker_roster_captions.js, and the participant-list pass as
+// clicker_roster_panel*.js. All are generated, and all are already ignored by
+// the repository's tests/js/clicker_*.js rule.
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
 
@@ -33,6 +34,10 @@ const drain      = read('clicker_roster_drain.js');
 const drainFlush = read('clicker_roster_drain_flush.js');
 const drainOther = read('clicker_roster_drain_other.js');
 const captions   = read('clicker_roster_captions.js');
+const panel      = read('clicker_roster_panel.js');
+const panelMeet  = read('clicker_roster_panel_meet.js');
+const panelZoom  = read('clicker_roster_panel_zoom.js');
+const installFrame = read('clicker_roster_install_frame.js');
 
 // Kept in step with TICK_MS in emit_roster.py.
 const TICK_MS = 20;
@@ -329,7 +334,107 @@ check('Generic: an unknown provider on a page that is not a meeting -> ok false'
 }
 
 // ---------------------------------------------------------------------------
-// 7. The resident observer: installing, draining, and not doing either twice
+// 7. The one pass that may open the participant list
+//
+// It looks before it presses, in the same turn. A room that pressed a control
+// somebody had already used would close the panel on them, and the panel is on
+// the television in front of everybody.
+// ---------------------------------------------------------------------------
+
+{
+  const p = page(`<body><div role="toolbar">
+    <button aria-label="Chat">Chat</button>
+    <button aria-label="People">People</button>
+    <button aria-label="Leave">Leave</button></div></body>`);
+  const out = p.run(panel);
+  check('Panel: "People" is pressed on a shut panel',
+        out.clicked === 'people' && out.open === false && p.clicks.length === 1,
+        JSON.stringify(out));
+}
+{
+  const p = page(`<body><button aria-label="People">People</button>
+    <div data-tid="roster"><div data-tid="roster-participant">Priya Nair</div></div></body>`);
+  const out = p.run(panel);
+  check('Panel: a list somebody already opened is left exactly as it is',
+        out.open === true && out.clicked === null && p.clicks.length === 0,
+        JSON.stringify(out));
+}
+{
+  const p = page('<body><button aria-label="People" aria-expanded="true">People</button></body>');
+  const out = p.run(panel);
+  check('Panel: a control that says it is expanded counts as open',
+        out.open === true && p.clicks.length === 0, JSON.stringify(out));
+}
+{
+  const p = page('<body><button aria-label="Hide participants">Hide participants</button></body>');
+  const out = p.run(panel);
+  check('Panel: the control that would close it is never pressed',
+        out.clicked === null && p.clicks.length === 0, JSON.stringify(out));
+}
+{
+  const p = page('<body><button>Leave</button><button>Invite people</button></body>');
+  const out = p.run(panel);
+  check('Panel: leaving the call and inviting people are not it either',
+        out.clicked === null && p.clicks.length === 0, JSON.stringify(out));
+}
+{
+  const p = page('<body><button>Reactions</button></body>');
+  const out = p.run(panel);
+  check('Panel: a page with no such control is not an error',
+        out.clicked === null && out.open === false, JSON.stringify(out));
+}
+{
+  const p = page(`<body><button aria-label="Chat with everyone">Chat with everyone</button>
+    <button aria-label="Show everyone">Show everyone</button></body>`,
+    { url: 'https://meet.google.com/abc' });
+  const out = p.run(panelMeet);
+  check('Panel: Meet says "Show everyone", and the chat beside it is not that',
+        out.clicked === 'show everyone', JSON.stringify(out));
+}
+{
+  const p = page('<body><button aria-label="open the participants list pane"></button></body>',
+                 { url: 'https://zoom.us/wc/1/join' });
+  const out = p.run(panelZoom);
+  check('Panel: Zoom names the whole pane in the label, and is matched on it',
+        out.clicked === 'open the participants list pane', JSON.stringify(out));
+}
+{
+  const p = page('<body><button data-hidden aria-label="People">People</button></body>');
+  const out = p.run(panel);
+  check('Panel: a control with no box on screen is not pressed',
+        out.clicked === null && p.clicks.length === 0, JSON.stringify(out));
+}
+{
+  // Teams draws its stage in an iframe. While that frame is same-origin the
+  // pass steps into it; when it is not, cdp.py evaluates this same script
+  // inside the frame instead, which is why nothing here may throw either way.
+  const p = page('<body><iframe id="stage"></iframe></body>');
+  const inner = p.document.getElementById('stage').contentDocument;
+  inner.body.innerHTML = '<button aria-label="People">People</button>';
+  p.window.eval(`
+    var f = document.getElementById('stage').contentWindow;
+    f.Element.prototype.getBoundingClientRect = function () {
+      return {width:180,height:44,top:100,left:100,bottom:144,right:280};
+    };
+    f.Element.prototype.scrollIntoView = function () {};
+    f.HTMLElement.prototype.click = function () {
+      window.__clicks.push((this.getAttribute('aria-label') || '').trim());
+    };
+  `);
+  const out = p.run(panel);
+  check('Panel: the control inside a same-origin stage frame is found',
+        out.clicked === 'people' && p.clicks.length === 1, JSON.stringify(out));
+}
+{
+  const p = page('<body><iframe src="https://other.example/x"></iframe></body>',
+                 { url: 'https://x.example/' });
+  let ok = true;
+  try { p.run(panel); } catch (e) { ok = false; }
+  check('Panel: a cross-origin frame does not break the pass', ok);
+}
+
+// ---------------------------------------------------------------------------
+// 8. The resident observer: installing, draining, and not doing either twice
 // ---------------------------------------------------------------------------
 
 (async function () {
@@ -452,6 +557,32 @@ check('Generic: an unknown provider on a page that is not a meeting -> ok false'
     const out = p.run(drain);
     check('Observer: it stops itself once the page has moved on',
           out.installed === false && out.reason === 'page-moved-on', JSON.stringify(out));
+  }
+
+  // An observer offered to a frame with no meeting in it must refuse, and must
+  // leave nothing behind when it does — no state, and above all no timer
+  // ticking on the room's television for a frame nobody will ever drain.
+  {
+    const p = page('<body><div>a shell with no meeting in it</div></body>');
+    const out = p.run(installFrame);
+    check('Observer: it will not settle in a frame with no meeting in it',
+          out.ok === false && out.state === 'no-surface', JSON.stringify(out));
+    check('Observer: refusing leaves no state behind',
+          p.window.eval('typeof window.__pcRoster') === 'undefined');
+    check('Observer: and a drain there says plainly that nothing is installed',
+          p.run(drain).installed === false, JSON.stringify(p.run(drain)));
+  }
+
+  // The same script, in the frame that does have the meeting: it settles.
+  {
+    const p = page(`<body>
+      <div data-stream-type="Video" data-tid="Alice Ng"></div></body>`);
+    const out = p.run(installFrame);
+    check('Observer: it settles where the meeting actually is',
+          out.ok === true && out.state === 'installed', JSON.stringify(out));
+    await sleep(TICK_MS * 3);
+    check('Observer: and the drain finds it there',
+          p.run(drain).installed === true);
   }
 
   // The observer must never throw, whatever it is pointed at.

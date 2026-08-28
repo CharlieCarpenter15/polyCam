@@ -733,6 +733,36 @@
       });
   }
 
+  function renderDevices(devices) {
+    var rows = [
+      ["Room microphone", devices.room],
+      ["What the room hears", devices.far_end]
+    ];
+    $("devices-list").innerHTML = rows.map(function (row) {
+      var track = row[1] || {};
+      var on = track.enabled !== false;
+      var device = track.device || "(not found)";
+      return '<li class="mn-model">' +
+        '<span class="mn-model-what">' + R.escapeHtml(row[0]) + "</span>" +
+        '<span class="mn-model-name">' + R.escapeHtml(device) + "</span>" +
+        '<span class="' + (on && track.device ? "mn-model-here" : "mn-model-missing") + '">' +
+        (on ? (track.device ? "ready" : "not found") : "off") + "</span>" +
+        (track.notice ? '<span class="mn-model-what">' + R.escapeHtml(track.notice) + "</span>" : "") +
+        "</li>";
+    }).join("");
+  }
+
+  function checkDevices(button) {
+    R.withButton(button, function () { return R.get("/api/minutes/devices"); })
+      .then(function (data) { renderDevices(data.devices || {}); })
+      .catch(function (error) {
+        $("devices-list").innerHTML = '<li class="mn-model">' +
+          '<span class="mn-model-missing">' +
+          R.escapeHtml(error.message || "The audio devices could not be read.") +
+          "</span></li>";
+      });
+  }
+
   function mb(bytes) {
     var n = Number(bytes) || 0;
     if (!n) return "";
@@ -866,6 +896,7 @@
     $("look-now").addEventListener("click", function () { lookAtRoom(this); });
     $("probe-window").addEventListener("click", function () { probeWindow(this); });
     $("models-install").addEventListener("click", function () { installModels(this); });
+    $("devices-check").addEventListener("click", function () { checkDevices(this); });
   }
 
   function init() {

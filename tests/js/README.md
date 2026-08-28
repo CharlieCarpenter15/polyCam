@@ -60,6 +60,11 @@ what each of them said. It builds fake Teams / Meet / Zoom meeting stages with
   transcript is not full of half-sentences
 * installs its in-page observer only once, keeps its state across a re-install,
   and tears itself down when the page moves on
+* refuses to install in a frame that has no meeting in it, leaving nothing
+  behind — which is what lets the caller try the next frame instead of settling
+  in the page shell and watching an empty room for the whole meeting
+* presses the participants control when asked to, exactly once, and never
+  presses "Hide participants", "Invite people" or anything about leaving
 
 Run them on a development machine:
 
