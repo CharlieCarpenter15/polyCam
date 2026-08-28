@@ -405,6 +405,28 @@ class TestDiskGuard:
         # What was captured before the disk filled is still there.
         assert capture.room_wav is not None and capture.room_wav.exists()
 
+    def test_reserved_blocks_do_not_make_a_healthy_disk_look_full(
+        self, recorder, monkeypatch
+    ):
+        """The real numbers from a machine this guard wrongly refused.
+
+        ``shutil.disk_usage`` reports ``free`` as what a non-root process may
+        have but ``total`` as the whole filesystem, so ``free / total`` reads
+        30 GB free out of 40 GB in use as 11 % and refuses to record. The share
+        has to be measured against what is addressable.
+        """
+        monkeypatch.setattr(
+            audio.shutil,
+            "disk_usage",
+            lambda _path: types.SimpleNamespace(
+                total=270_600_000_000, used=9_300_000_000, free=30_500_000_000
+            ),
+        )
+        assert audio.disk_free_percent() == pytest.approx(76.6, abs=0.1)
+        started, why = recorder.start(room=True, far_end=True)
+        assert started, why
+        recorder.stop()
+
     def test_an_unmeasurable_disk_does_not_block_recording(self, recorder, monkeypatch):
         def refuse(_path):
             raise OSError("no such filesystem")
@@ -487,6 +509,21 @@ class TestSupervision:
 
         capture = recorder.stop()
         assert frames_in(capture.room_wav) == first + second
+
+    def test_a_first_piece_that_never_appeared_does_not_lose_the_rest(
+        self, recorder, popen, session_dir
+    ):
+        """The recorder died before writing anything; the restart caught it all."""
+        recorder.start(room=True, far_end=False)
+        (session_dir / "room.wav").unlink()
+        popen.processes[0].die()
+        recorder._tick()
+        second = frames_in(session_dir / "room.1.wav")
+
+        capture = recorder.stop()
+        assert capture.room_wav == session_dir / "room.wav"
+        assert frames_in(capture.room_wav) == second
+        assert not (session_dir / "room.1.wav").exists()
 
     def test_a_recorder_that_will_not_stay_up_is_given_up_on(self, recorder, popen):
         recorder.start(room=True, far_end=False)
@@ -618,6 +655,11 @@ class TestMockMode:
         assert made.start(room=True, far_end=False)[0]
         capture = made.stop()
         assert capture.room_wav is not None
+        # The notice must say what is actually wrong. Telling an appliance in a
+        # meeting room that it is in "development mode" sends whoever reads it
+        # looking in entirely the wrong place.
+        assert any("No recorder is installed" in n for n in capture.notices)
+        assert not any("Development mode" in n for n in capture.notices)
 
     def test_the_placeholder_lasts_as_long_as_the_recording_did(
         self, mock_config, session_dir
@@ -648,7 +690,9 @@ class TestMockMode:
     def test_a_recorder_is_not_reusable(self, mock_config, session_dir):
         made = audio.Recorder(mock_config, session_dir)
         assert made.start(room=True, far_end=False)[0]
-        assert made.start(room=True, far_end=False) == (False, "This recorder has already been used.")
+        again, why = made.start(room=True, far_end=False)
+        assert not again
+        assert why == "This recorder has already been used."
         made.stop()
 
 

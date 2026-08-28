@@ -359,7 +359,7 @@ class PeopleStore:
         if person is None:
             return False
         for index in list(person.photos):
-            path = paths.photo_path(person.id, index)
+            path = paths.find_photo(person.id, index)
             if path is not None:
                 try:
                     path.unlink()

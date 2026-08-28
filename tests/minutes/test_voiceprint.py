@@ -133,7 +133,9 @@ class TestFingerprints:
 
     def test_the_vector_records_which_model_made_it(self, two_voices):
         _, model, _ = voiceprint.embed_file(two_voices, 0.8, 5.0)
-        assert model in (voiceprint.MODEL_VOSK, voiceprint.MODEL_MFCC)
+        assert model in (
+            voiceprint.MODEL_TITANET, voiceprint.MODEL_VOSK, voiceprint.MODEL_MFCC
+        )
 
     def test_empty_audio_is_an_error_not_a_crash(self):
         vector, _, error = voiceprint.embed_samples(b"")
@@ -157,7 +159,16 @@ class TestAvailability:
         config.update({"MINUTES_IDENTIFY_VOICES": True})
         ok, why = voiceprint.available(config)
         assert ok is True
-        assert "cannot" in why.lower() or "not be named" in why.lower()
+        assert "cannot be named" in why.lower()
+
+    def test_the_engine_order_prefers_the_good_model(self):
+        """MFCC is the last resort, never the first choice."""
+        assert voiceprint.model_name() in (
+            voiceprint.MODEL_TITANET, voiceprint.MODEL_VOSK, voiceprint.MODEL_MFCC
+        )
+        assert voiceprint.can_name_people() is False, (
+            "nothing is installed here, so nothing may be named"
+        )
 
     def test_numpy_missing_blocks_it_entirely(self, config):
         config.update({"MINUTES_IDENTIFY_VOICES": True})
@@ -185,7 +196,17 @@ class TestLabellingAMeeting:
             Segment(6.2, 11.2, "second speaker", TRACK_ROOM),
         ]
 
-    def test_an_enrolled_voice_is_named(self, two_voices, store, enabled):
+    @pytest.fixture()
+    def naming(self, monkeypatch):
+        """Pretend a real speaker model and a real VAD are installed.
+
+        Naming is deliberately withheld unless both are: the MFCC fallback
+        cannot identify anybody, and the loudness-based speech detector misses
+        so much speech that a segment it produced is not safe to put a name to.
+        """
+        monkeypatch.setattr(voiceprint, "can_name_people", lambda: True)
+
+    def test_an_enrolled_voice_is_named(self, two_voices, store, enabled, naming):
         charlie, _ = store.add("Charlie", "charlie@example.com")
         vector, model, _ = voiceprint.embed_file(two_voices, 0.8, 5.0)
         store.add_vector(charlie.id, KIND_VOICE, model, vector)
@@ -196,7 +217,9 @@ class TestLabellingAMeeting:
         assert labels.get(0, ("", "", 0))[0] == "Charlie"
         assert labels[0][1] == charlie.id
 
-    def test_an_unenrolled_voice_is_never_given_a_name(self, two_voices, store, enabled):
+    def test_an_unenrolled_voice_is_never_given_a_name(
+        self, two_voices, store, enabled, naming
+    ):
         charlie, _ = store.add("Charlie")
         vector, model, _ = voiceprint.embed_file(two_voices, 0.8, 5.0)
         store.add_vector(charlie.id, KIND_VOICE, model, vector)
@@ -206,6 +229,30 @@ class TestLabellingAMeeting:
         )
         second = labels.get(1)
         assert second is None or second[1] == "", "an unknown voice must not get a profile"
+
+    def test_nobody_is_named_when_only_the_loudness_detector_is_available(
+        self, two_voices, store, enabled
+    ):
+        """A segment found by loudness alone may be half somebody else's sentence."""
+        charlie, _ = store.add("Charlie")
+        vector, model, _ = voiceprint.embed_file(two_voices, 0.8, 5.0)
+        store.add_vector(charlie.id, KIND_VOICE, model, vector)
+
+        labels, note = voiceprint.label_room_segments(
+            two_voices.parent, self.segments(), store, enabled
+        )
+        assert all(person_id == "" for _, person_id, _ in labels.values())
+        if labels:
+            assert "not named" in note
+
+    def test_speakers_are_still_kept_apart_without_a_model(
+        self, two_voices, store, enabled
+    ):
+        labels, _ = voiceprint.label_room_segments(
+            two_voices.parent, self.segments(), store, enabled
+        )
+        names = {name for name, _, _ in labels.values()}
+        assert len(names) == len(labels), "two different voices must not share a label"
 
     def test_remote_segments_are_left_alone(self, two_voices, store, enabled):
         segments = [Segment(0.6, 5.6, "on the call", TRACK_FAR_END)]

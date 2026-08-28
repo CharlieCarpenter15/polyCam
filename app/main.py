@@ -46,6 +46,8 @@ from .health_service import HealthService
 from .join_flows import PROVIDER_FLOWS
 from .logging_setup import get_logger, log_event, setup_logging
 from .meeting_service import MeetingService
+from .minutes import MinutesService
+from .minutes.web import minutes_bp
 from .models import MODES
 from .poly_service import PolyService
 from .remote_service import ACTIONS, RemoteService
@@ -97,6 +99,10 @@ class RoomAppliance:
             self.system,
         )
         self.remote = RemoteService(config, self._on_remote_action)
+        # Reads the room's state; never writes to it. Inert unless switched on.
+        self.minutes = MinutesService(
+            config, self.calendar, self.room, self.poly, self.browser
+        )
         self._started = False
         config.on_change(self._on_config_change)
 
@@ -132,10 +138,13 @@ class RoomAppliance:
         self.room.start()
         self.health.start()
         self.remote.start()
+        self.minutes.start()
 
     def stop(self) -> None:
         log_event(log, logging.INFO, "application.stopping")
-        for service in (self.remote, self.health, self.room, self.poly, self.calendar):
+        for service in (
+            self.minutes, self.remote, self.health, self.room, self.poly, self.calendar
+        ):
             try:
                 service.stop()
             except Exception:  # pragma: no cover
@@ -176,6 +185,10 @@ def create_app(config: ConfigManager | None = None, *, start_services: bool = Tr
     )
 
     register_routes(app, appliance)
+    # A blueprint rather than more routes here: the feature is self-contained,
+    # and when it is switched off every one of its routes answers as though it
+    # did not exist.
+    app.register_blueprint(minutes_bp)
 
     if start_services:
         appliance.start()
@@ -357,6 +370,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "overall": health["status"],
             "components": health["components"],
         }
+        payload["minutes"] = appliance.minutes.dashboard_payload()
         payload["panel_url"] = _panel_url()
         payload["controller"] = _controller_hint()
         payload["setup"] = _setup_hint()

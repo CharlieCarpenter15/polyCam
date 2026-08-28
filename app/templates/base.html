@@ -23,6 +23,12 @@
         {% if panel_enabled %}
           <a href="{{ url_for('panel') }}" class="nav-link {% if active_page == 'panel' %}current{% endif %}">Control</a>
         {% endif %}
+        {# Read from the configuration rather than the context, so that every
+           page that extends this one gets the link without each of them having
+           to remember to pass a flag. #}
+        {% if config.bool_('MINUTES_ENABLED') %}
+          <a href="{{ url_for('minutes.page') }}" class="nav-link {% if active_page == 'minutes' %}current{% endif %}">Minutes</a>
+        {% endif %}
         <a href="{{ url_for('settings_page') }}" class="nav-link {% if active_page == 'settings' %}current{% endif %}">Settings</a>
         <a href="{{ url_for('diagnostics_page') }}" class="nav-link {% if active_page == 'diagnostics' %}current{% endif %}">Checks</a>
       </nav>

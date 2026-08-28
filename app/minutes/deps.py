@@ -34,6 +34,9 @@ _MODULES: dict[str, tuple[str, str, str]] = {
     # ``objdetect`` module, and the contrib wheel is three times the size for
     # nothing we need.
     "opencv": ("cv2", "opencv-python-headless", "finding and recognising faces"),
+    "sherpa_onnx": (
+        "sherpa_onnx", "sherpa-onnx", "recognising voices in the room",
+    ),
     "vosk": ("vosk", "vosk", "offline speech-to-text and voice fingerprints"),
     "faster_whisper": ("faster_whisper", "faster-whisper", "offline speech-to-text"),
     "webrtcvad": ("webrtcvad", "webrtcvad-wheels", "splitting audio into speech turns"),

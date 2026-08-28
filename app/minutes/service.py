@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..background_service import detect_image_type
 from ..logging_setup import get_logger, log_event
 from ..store import read_json, write_json
 from . import attribute, audio, deps, faces, mailer, paths, roster, summarize, transcribe, voiceprint
@@ -66,6 +67,16 @@ STAGE_DISCARDED = "discarded"
 
 #: A stage that means the worker still owes this session something.
 UNFINISHED = (STAGE_RECORDING, STAGE_CAPTURED)
+
+#: How long before a meeting is due to start the camera is left alone, so that
+#: a sweep can never be holding it when the browser asks for it. Comfortably
+#: more than the appliance's own early-join window.
+CAMERA_QUIET_BEFORE = 180.0
+
+#: How long to wait after a meeting before looking at the room again. Chromium
+#: releases a camera asynchronously, so "the meeting has closed" is not the same
+#: as "the camera is free".
+CAMERA_SETTLE_AFTER = 8.0
 
 #: Sweep expired sessions this often. Retention is measured in days, so once
 #: every few hours is plenty and keeps the work off the meeting path.
@@ -109,6 +120,7 @@ class MinutesService:
         self._recording: Recording | None = None
         self._last_room_look: dict[str, Any] = {}
         self._last_look_at: datetime | None = None
+        self._meeting_ended_at: datetime | None = None
         self._last_sweep: datetime | None = None
         #: What the worker is doing right now, for the web page.
         self._working_on: str = ""
@@ -301,8 +313,19 @@ class MinutesService:
             {"people": recording.room_people},
             mode=0o600,
         )
+        # "Three pieces were joined", "the speaker changed mid-meeting", "this
+        # recording is silence" — the reader of the transcript is exactly who
+        # needs to know, so these are kept rather than left in the log.
+        if capture is not None and capture.notices:
+            write_json(
+                recording.dir / "capture.json",
+                {"notices": list(capture.notices)},
+                mode=0o600,
+            )
+
         meta.stage = STAGE_CAPTURED
         self._write_meta(meta, recording.dir)
+        self._meeting_ended_at = datetime.now(timezone.utc)
         log_event(
             log, logging.INFO, "minutes.recording_stopped",
             session=meta.session_id, seconds=round(seconds), reason=reason,
@@ -317,15 +340,49 @@ class MinutesService:
 
     # -- looking at the room ---------------------------------------------
     def _maybe_look_at_room(self) -> None:
+        """Look at the room, unless a meeting is about to want the camera.
+
+        A sweep holds the camera for about twelve seconds. The camera cannot be
+        opened twice, so a meeting joining during one would find it busy — and
+        between "the room screen misses a face" and "the room fails to join a
+        meeting" there is no contest. So the sweep gives way twice over: it does
+        not start when a meeting is due within :data:`CAMERA_QUIET_BEFORE`, and
+        it waits :data:`CAMERA_SETTLE_AFTER` after a meeting ends, because
+        Chromium releases a camera asynchronously and a sweep that starts the
+        instant a meeting closes can still lose the race.
+        """
         if not self.config.bool_("MINUTES_IDENTIFY_FACES"):
             return
-        every = max(15, self.config.int_("MINUTES_ROOM_SCAN_SECONDS"))
         now = datetime.now(timezone.utc)
+
+        if self._meeting_ended_at is not None:
+            since = (now - self._meeting_ended_at).total_seconds()
+            if since < CAMERA_SETTLE_AFTER:
+                return
+
+        if self._meeting_due_within(CAMERA_QUIET_BEFORE):
+            return
+
+        every = max(15, self.config.int_("MINUTES_ROOM_SCAN_SECONDS"))
         if self._last_look_at is not None:
             if (now - self._last_look_at).total_seconds() < every:
                 return
         self._last_look_at = now
         self.look_at_room_now()
+
+    def _meeting_due_within(self, seconds: float) -> bool:
+        """Is a meeting about to start and want the camera?"""
+        try:
+            now = datetime.now(self.config.tz())
+            _, upcoming = self.calendar.current_and_upcoming(now)
+        except Exception:  # pragma: no cover - a calendar fault must not block
+            return False
+        for meeting in upcoming[:3]:
+            if not getattr(meeting, "has_link", False):
+                continue
+            if 0 <= meeting.minutes_until(now) * 60.0 <= seconds:
+                return True
+        return False
 
     def look_at_room_now(self) -> dict[str, Any]:
         """Take one look through the room camera and remember who was there."""
@@ -361,8 +418,16 @@ class MinutesService:
                 self._working_on = ""
                 self._queue.task_done()
 
-    def process(self, session_id: str, *, resummarise: bool = False) -> tuple[bool, str]:
-        """Turn a captured session into a transcript, a summary and an email."""
+    def process(self, session_id: str) -> tuple[bool, str]:
+        """Turn a captured session into a transcript, a summary and an email.
+
+        Safe to run again on a session that has already been through it: an
+        existing transcript is reused rather than rebuilt. Transcribing is the
+        slow, deterministic step and would produce the same words a second time
+        — and by then the audio it was made from has usually been deleted.
+        Summarising and sending are the steps worth repeating, which is what
+        ``reprocess`` is for.
+        """
         directory = paths.session_dir(session_id)
         if directory is None or not directory.is_dir():
             return False, "No such recording."
@@ -370,12 +435,7 @@ class MinutesService:
         if meta is None:
             return False, "That recording has no meta file and cannot be processed."
 
-        existing = self._read_transcript(directory)
-        if existing is not None and not resummarise:
-            written = existing
-        else:
-            written = existing if existing is not None else None
-
+        written = self._read_transcript(directory)
         if written is None:
             written, error = self._transcribe(meta, directory)
             if error and not written.segments:
@@ -404,7 +464,10 @@ class MinutesService:
         """Words, then who said them."""
         written = Transcript(meta=meta)
         engine = transcribe.choose_engine(self.config)
-        notices: list[str] = []
+        captured = read_json(directory / "capture.json", default={}) or {}
+        notices: list[str] = [
+            str(note) for note in (captured.get("notices") or []) if str(note).strip()
+        ]
 
         # When the meeting app was captioning, it has already written down every
         # remote speaker's words with their name attached, which is both more
@@ -421,9 +484,23 @@ class MinutesService:
         segments, notes = transcribe.transcribe_session(
             engine, directory, self.config, skip_far_end=far_end_covered
         )
-        written.segments = sorted(
-            segments + caption_segments, key=lambda item: item.start
-        )
+        merged = sorted(segments + caption_segments, key=lambda item: item.start)
+
+        # The room microphone hears the speaker as well as the room, so a
+        # remote sentence can arrive twice: once from the call and once as a
+        # room-coloured echo a moment later. transcribe_session already removes
+        # those within its own output, but it never sees the caption lines, and
+        # skipping the far-end track leaves the echo as the *only* copy of that
+        # speech that has not been checked.
+        if caption_segments:
+            merged, echoed = transcribe.drop_echoes(merged)
+            if echoed:
+                notices.append(
+                    f"{echoed} lines the room microphone picked up from the "
+                    "speaker were removed, because the captions already had them."
+                )
+
+        written.segments = merged
         notices.extend(notes)
 
         samples = roster.load_samples(directory)
@@ -498,8 +575,12 @@ class MinutesService:
             return []
         out: list[dict[str, str]] = []
         for session_id in paths.list_session_ids():
-            if session_id == meta.session_id or len(out) >= limit:
+            if len(out) >= limit:
                 break
+            # The session being written up is the newest, so it is the first
+            # thing this loop sees. Skipping it is not the same as stopping.
+            if session_id == meta.session_id:
+                continue
             directory = paths.session_dir(session_id)
             if directory is None:
                 continue
@@ -808,7 +889,9 @@ class MinutesService:
             log, logging.INFO, "minutes.relabelled",
             session=session_id, person=person.id, segments=len(touched),
         )
-        return True, f"{len(touched)} lines are now labelled “{person.name}”.{learned}"
+        count = len(touched)
+        lines = "line is" if count == 1 else "lines are"
+        return True, f"{count} {lines} now labelled “{person.name}”.{learned}"
 
     def reprocess(self, session_id: str) -> tuple[bool, str]:
         """Run the summary and the email again for a session already recorded."""
@@ -826,8 +909,9 @@ class MinutesService:
         vector, model, error = faces.embed_image(data, self.config)
         if error:
             return False, error
+        kind = detect_image_type(data[:32])
         index = self.people.next_photo_index(person_id)
-        path = paths.photo_path(person_id, index)
+        path = paths.photo_path(person_id, index, kind[0] if kind else ".jpg")
         if path is not None:
             try:
                 paths.ensure_dirs()

@@ -313,6 +313,8 @@ def api_people_create():
 @needs_minutes
 def api_people_update(person_id: str):
     service = _service()
+    if service.people.get(person_id) is None:
+        return fail("No such person.", 404)
     payload = request.get_json(silent=True) or {}
     # Only the fields actually sent are changed, so editing a name cannot
     # blank an email address the form did not happen to include.
@@ -324,7 +326,7 @@ def api_people_update(person_id: str):
         return fail("There was nothing to change.")
     person, error = service.people.update(person_id, **changes)
     if person is None:
-        return fail(error, 404 if error == "No such person." else 400)
+        return fail(error)
     return ok(person=person.to_public_dict(), detail="Saved.")
 
 
@@ -434,16 +436,17 @@ def _read_capped(stream, head: bytes, limit: int) -> tuple[bytes, str]:
 def api_people_photo_get(person_id: str, index: int):
     """Serve one reference photo.
 
-    The path comes from ``paths.photo_path()`` — which returns None unless the
-    id matches the generated-id regex and the index is in range — so no part of
-    the request is ever joined onto a directory. The type is taken from the
-    file's own first bytes rather than its ``.jpg`` name, because that name is
-    a slot number and not a claim about the contents.
+    The path comes from ``paths.find_photo()`` — which returns None unless the
+    id matches the generated-id regex and the index is in range, and which then
+    looks in the one directory this feature owns — so no part of the request is
+    ever joined onto a path. The content type is read from the file's own first
+    bytes rather than taken from its name, because that name is a slot number
+    and a suffix, not a claim anybody has checked.
     """
     service = _service()
     if service.people.get(person_id) is None:
         return fail("No such photo.", 404)
-    path = paths.photo_path(person_id, index)
+    path = paths.find_photo(person_id, index)
     if path is None or not path.is_file():
         return fail("No such photo.", 404)
     try:

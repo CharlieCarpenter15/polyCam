@@ -1247,7 +1247,10 @@ FIELDS: tuple[Field, ...] = (
         help="Looks at the room through the conference-bar camera between "
         "meetings and notes which enrolled colleagues are present. It cannot look "
         "during a meeting — the camera belongs to the meeting then — so the "
-        "roster is whoever was seen just before the meeting started.",
+        "roster is whoever was seen just before the meeting started. Expect it to "
+        "name most people within about two metres of the bar, to get steadily "
+        "worse past three, and to see nobody at all at the far end of a long "
+        "table. Backlighting, a turned head and a late arrival all defeat it.",
     ),
     Field(
         key="MINUTES_IDENTIFY_VOICES",
@@ -1256,8 +1259,11 @@ FIELDS: tuple[Field, ...] = (
         group="minutes",
         label="Recognise voices in the room (experimental)",
         help="Matches each in-room speaking turn against enrolled voice profiles. "
-        "Genuinely hard on a far-field microphone: expect it to be useful as a "
-        "suggestion you correct, not as an answer you trust.",
+        "Genuinely hard on a far-field microphone in a room with hard walls: "
+        "expect it to be useful as a suggestion you correct, not as an answer you "
+        "trust. Even when it cannot name anybody it still keeps two speakers "
+        "apart, which is worth having on its own — and correcting a name in a "
+        "transcript afterwards is what teaches it.",
     ),
     Field(
         key="MINUTES_FACE_THRESHOLD",

@@ -29,4 +29,11 @@ faster-whisper==1.1.1
 vosk==0.3.45
 
 # Splitting recorded audio into speech turns before fingerprinting a voice.
+# Note the "-wheels" suffix: the original webrtcvad publishes no ARM wheel and
+# would have to be compiled on the Pi. The import name is the same.
 webrtcvad-wheels==2.0.14
+
+# Recognising voices. Bundles its own ONNX runtime, so this is the whole
+# dependency — no PyTorch, no compiler. Needs a speaker-embedding model in
+# var/minutes/models; see docs/meeting-minutes.md.
+sherpa-onnx==1.12.14

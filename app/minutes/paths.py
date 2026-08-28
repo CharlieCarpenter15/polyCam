@@ -76,8 +76,26 @@ def list_session_ids() -> list[str]:
     return sorted((n for n in names if SESSION_ID_RE.match(n)), reverse=True)
 
 
-def photo_path(person_id: str, index: int) -> Path | None:
-    """Where person ``person_id``'s reference photo number ``index`` lives."""
+def photo_path(person_id: str, index: int, suffix: str = ".jpg") -> Path | None:
+    """Where person ``person_id``'s reference photo number ``index`` goes.
+
+    The suffix follows what the bytes actually are rather than what the upload
+    claimed, so a PNG is never filed under a name saying it is a JPEG. Reading
+    one back goes through :func:`find_photo`, which does not need to know.
+    """
     if not PERSON_ID_RE.match(person_id or "") or not 0 <= index < 100:
         return None
-    return PHOTOS_DIR / f"{person_id}-{index:02d}.jpg"
+    if suffix not in (".jpg", ".png"):
+        return None
+    return PHOTOS_DIR / f"{person_id}-{index:02d}{suffix}"
+
+
+def find_photo(person_id: str, index: int) -> Path | None:
+    """The photo stored at ``index``, whatever format it turned out to be."""
+    if not PERSON_ID_RE.match(person_id or "") or not 0 <= index < 100:
+        return None
+    for suffix in (".jpg", ".png"):
+        candidate = PHOTOS_DIR / f"{person_id}-{index:02d}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None

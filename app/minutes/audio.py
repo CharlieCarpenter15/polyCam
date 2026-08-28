@@ -181,18 +181,19 @@ def devices(config: Any) -> dict[str, Any]:
             "client_name": CLIENT_NAME,
         }
         if mock:
+            why = _mock_reason(config)
             payload["room"] = {
                 "enabled": _flag(config, "MINUTES_RECORD_ROOM"),
                 "device": "(silence)",
                 "stream": STREAM_ROOM,
-                "notice": "Development mode: nothing is recorded from the room.",
+                "notice": why,
             }
             payload["far_end"] = {
                 "enabled": _flag(config, "MINUTES_RECORD_FAR_END"),
                 "device": "(silence)",
                 "stream": STREAM_FAR_END,
                 "sink": "",
-                "notice": "Development mode: nothing is recorded from the call.",
+                "notice": why,
             }
             return payload
 
@@ -275,11 +276,8 @@ def record_sample(config: Any, seconds: int) -> tuple[Path | None, str]:
     repair(target)
     if _payload_bytes(target) < FRAME_BYTES * SAMPLE_RATE // 2:
         _discard(target)
-        return None, (
-            "Nothing was captured from the microphone. " + notice
-            if notice
-            else "Nothing was captured from the microphone."
-        )
+        complaint = "Nothing was captured from the microphone."
+        return None, f"{complaint} {notice}".strip()
     log_event(
         log, logging.INFO, "minutes.audio.sample_recorded",
         seconds=round(wav_seconds(target), 1), device=device,
@@ -457,10 +455,11 @@ class Recorder:
         with self._lock:
             self._tracks = tracks
             self._started_at = time.monotonic()
-        self._note(
-            "Development mode: this recording is silence, not the room."
+        self._note(_mock_reason(self.config))
+        log_event(
+            log, logging.INFO, "minutes.audio.simulated",
+            tracks=len(tracks), dev_mode=_dev_mode(self.config),
         )
-        log_event(log, logging.INFO, "minutes.audio.simulated", tracks=len(tracks))
         return True, ""
 
     def _spawn(self, track: _Track, why: str) -> str:
@@ -680,7 +679,10 @@ class Recorder:
         if not parts:
             self._note(f"Nothing was recorded from {track.label}.")
             return None
-        if len(parts) > 1:
+        # More than one piece, or a first piece that never appeared at all —
+        # either way what survives has to be moved into the expected name, or a
+        # recording that exists would be reported as a meeting nobody recorded.
+        if len(parts) > 1 or parts[0] != track.target:
             frames, error = concatenate(track.target, parts)
             if error:
                 self._note(
@@ -692,10 +694,11 @@ class Recorder:
                 track=track.key, pieces=len(parts),
                 seconds=round(frames / SAMPLE_RATE, 1),
             )
-            self._note(
-                f"{len(parts)} pieces of {track.label} were joined into one "
-                "recording."
-            )
+            if len(parts) > 1:
+                self._note(
+                    f"{len(parts)} pieces of {track.label} were joined into one "
+                    "recording."
+                )
         else:
             repair(track.target)
         if _payload_bytes(track.target) < FRAME_BYTES:
@@ -942,15 +945,25 @@ def disk_free_percent() -> float | None:
     ``shutil`` rather than ``SystemService``: this is one syscall and asking for
     a whole service to make it would tie the recorder to the appliance’s object
     graph for no benefit.
+
+    The share is deliberately ``free / (used + free)`` and **not**
+    ``free / total``. Those two figures are not on the same scale:
+    ``shutil.disk_usage`` reports ``free`` as the space a non-root process may
+    actually have (``f_bavail``) but ``total`` as the whole filesystem, so on
+    every ext4 root — 5 % reserved for root by default — and on any thinly
+    provisioned volume, ``free / total`` reads far lower than the truth. A
+    machine with 30 GB genuinely free out of 40 GB in use measured as 11 % that
+    way, and this guard refused to record on it.
     """
     for candidate in (paths.MINUTES_DIR, paths.MINUTES_DIR.parent, Path("/")):
         try:
             usage = shutil.disk_usage(str(candidate))
         except (OSError, ValueError):
             continue
-        if usage.total <= 0:
+        addressable = usage.used + usage.free
+        if addressable <= 0:
             continue
-        return round(100.0 * usage.free / usage.total, 1)
+        return round(100.0 * usage.free / addressable, 1)
     return None
 
 
@@ -1069,6 +1082,21 @@ def _mock_mode(config: Any) -> bool:
     if _dev_mode(config):
         return True
     return not (_recorder_probe().ok and deps.probe("pactl").ok)
+
+
+def _mock_reason(config: Any) -> str:
+    """Why this recording is silence — the two reasons are not the same thing.
+
+    A developer on a laptop expects a placeholder. An appliance in a meeting
+    room producing one is a fault, and saying “development mode” to whoever
+    reads that notice would send them looking in entirely the wrong place.
+    """
+    if _dev_mode(config):
+        return "Development mode: this recording is silence, not the room."
+    return (
+        "No recorder is installed on this machine, so the meeting was not "
+        "actually captured — install pulseaudio-utils and record it again."
+    )
 
 
 def _dev_mode(config: Any) -> bool:

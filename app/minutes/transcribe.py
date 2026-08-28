@@ -582,11 +582,15 @@ def transcribe_session(
 
         segments.sort(key=lambda s: (s.start, s.end))
         kept, dropped = drop_echoes(segments)
-        if dropped:
+        if dropped == 1:
             notices.append(
-                f"{dropped} line{'s' if dropped != 1 else ''} the room microphone "
-                "picked up from the speaker were removed, because the call’s own "
-                "recording already had them."
+                "One line the room microphone picked up from the speaker was "
+                "removed, because the call’s own recording already had it."
+            )
+        elif dropped:
+            notices.append(
+                f"{dropped} lines the room microphone picked up from the speaker "
+                "were removed, because the call’s own recording already had them."
             )
         return kept, notices
     except Exception as exc:  # pragma: no cover - the worker must never die
@@ -615,7 +619,7 @@ def _transcribe_one(
             pass
     try:
         return engine.transcribe(wav, language=language, timeout=timeout)
-    except Exception as exc:  # pragma: no cover - an engine must not raise
+    except Exception as exc:  # an engine should not raise, but one day one will
         log.exception("minutes.transcribe.engine_raised")
         return [], f"{engine.name} failed on {wav.name}: {exc}"
 
