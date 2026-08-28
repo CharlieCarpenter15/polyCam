@@ -102,6 +102,25 @@ body.dashboard.hide-cursor { cursor: none; }
 
 .backdrop-layer.visible { opacity: 1; }
 
+/* A video slide covers the screen the way an image layer does, fades the same
+   way, and sits below .backdrop-shade so the dim and blur settings still
+   apply to it. */
+.backdrop-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 1.6s ease-in-out;
+  will-change: opacity;
+  /* Nothing shows through a video that has not painted its first frame. */
+  background: var(--bg);
+  pointer-events: none;
+}
+
+.backdrop-video.visible { opacity: 1; }
+
 .backdrop-shade {
   position: absolute;
   inset: 0;
@@ -469,6 +488,74 @@ body.dashboard.hide-cursor { cursor: none; }
 .panel-hint { font-size: 1.1vw; color: var(--text-faint); }
 .panel-hint strong { color: var(--text-dim); font-weight: 600; }
 
+/* --------------------------------------------------- controller QR badge */
+
+/* Scan-to-control, bottom right. It sits under a screen people look at all
+   day, so it stays quiet: footer-sized text, no accent colour, nothing that
+   competes with the clock or the JOIN button. */
+
+.controller-badge {
+  position: fixed;
+  right: 3.2vw;   /* in line with the screen's own padding */
+  bottom: 1.6vw;
+  z-index: 5;     /* under the overlays, which cover it completely */
+  display: flex;
+  align-items: center;
+  gap: 0.9vw;
+}
+
+.controller-caption {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  gap: 0.15vw;
+  max-width: 190px;
+}
+
+.controller-caption-title { font-size: 1.05vw; color: var(--text-dim); }
+
+.controller-caption-host {
+  font-size: 0.95vw;
+  color: var(--text-faint);
+  font-family: "SF Mono", "DejaVu Sans Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.controller-caption-host:empty { display: none; }
+
+/* The tile is white in both themes and pads the symbol: a QR code is only
+   readable while its quiet zone stays lighter than its modules, and what is
+   behind the badge is whatever wallpaper the room chose. */
+.controller-qr {
+  flex: 0 0 auto;
+  padding: 7px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  line-height: 0;
+}
+
+.controller-qr-image {
+  display: block;
+  /* A whole number of pixels, and no smoothing: a blurred module edge is a
+     code that takes three attempts to scan from across the room. */
+  width: 104px;
+  height: 104px;
+  image-rendering: pixelated;
+}
+
+/* The badge floats over the footer, so hand the footer back the space it
+   covers — otherwise the status indicators end up underneath it. That is the
+   190px caption, the gap, and the 104px symbol inside its padded tile. */
+body.qr-badge .bottom { padding-right: 344px; }
+
+/* Nothing to scan: one line saying which setting turns it on. It is wider
+   than the badge, so the footer gives up more of the row. */
+.controller-badge.is-hint .controller-caption { max-width: 46vw; }
+.controller-badge.is-hint .controller-caption-title { color: var(--text-faint); }
+body.qr-hint .bottom { padding-right: 48vw; }
+
 /* --------------------------------------------------------------- overlays */
 
 .overlay {
@@ -539,6 +626,47 @@ html[data-theme="light"] .overlay { background: rgba(238, 241, 246, 0.96); }
   font-family: "SF Mono", "DejaVu Sans Mono", ui-monospace, monospace;
 }
 
+/* The first-run overlay's own QR: this is the code that sets the room up, so
+   it is read from across the room and is the biggest thing on the screen after
+   the headline. */
+.setup-scan {
+  margin: 1.8vw 0 0.6vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9vw;
+}
+
+.setup-qr {
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  line-height: 0;
+}
+
+.setup-qr-image {
+  display: block;
+  width: 240px;
+  height: 240px;
+  image-rendering: pixelated;
+}
+
+.setup-scan-text {
+  margin: 0;
+  font-size: 1.8vw;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Nothing to scan yet: the same "switch this on" line the corner badge uses,
+   and no white tile standing empty. */
+.setup-scan.is-hint .setup-scan-text {
+  font-size: 1.5vw;
+  color: var(--warn);
+  max-width: 52vw;
+}
+
 .setup-url {
   margin: 1.4vw 0 0;
   font-size: 3.6vw;
@@ -603,8 +731,18 @@ html[data-theme="light"] .overlay { background: rgba(238, 241, 246, 0.96); }
   .join-button { font-size: 6vw; padding: 5vw; }
   .bottom { font-size: 3.4vw; }
   .indicators { display: none; }
+  .controller-badge { right: 4vw; bottom: 3vw; gap: 2vw; }
+  .controller-caption { max-width: 34vw; }
+  .controller-caption-title { font-size: 2.6vw; }
+  .controller-caption-host { font-size: 2.4vw; }
+  .controller-qr-image { width: 84px; height: 84px; }
+  .setup-qr-image { width: 180px; height: 180px; }
+  .setup-scan-text { font-size: 4vw; }
+  .setup-scan.is-hint .setup-scan-text { font-size: 3.2vw; max-width: 80vw; }
+  /* The indicators are already gone here, so the row needs no reserved space. */
+  body.qr-badge .bottom, body.qr-hint .bottom { padding-right: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .backdrop-layer, .backdrop-shade, .join-button { transition: none; }
+  .backdrop-layer, .backdrop-video, .backdrop-shade, .join-button { transition: none; }
 }

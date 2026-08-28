@@ -383,17 +383,24 @@ controller** — or from a terminal:
 If **Allow settings from other computers on the network** is already on, the
 controller is reachable and the code appears without changing anything.
 
-**What a scanned phone can and cannot do**
+**What a scanned phone can do**
 
-It gets the room buttons and nothing else — no Settings, no Diagnostics, no
-logs, no restarts. The design assumes the honest thing about a meeting room:
-someone who can see the code on the TV is standing in the room and could press
-the buttons on the TV anyway. Two settings tighten it where that is not true:
+By default: everything. The appliance is a Raspberry Pi on a wall with no
+keyboard, and the point of the code is that a phone is the keyboard — including
+for first-run setup, which happens before a PIN exists to ask for. Scanning it
+signs that phone in to the room: the room buttons, Settings, the background
+slideshow, restarts, updates, diagnostics and logs.
+
+The trade is "whoever can see this screen can run this room", which is close to
+what standing in the room already means — and the code is shown on the room's
+own screen and served nowhere else, so it cannot be fetched over the network.
+Three settings tighten it where that is not the right trade:
 
 | Setting | |
 | --- | --- |
-| **Ask for the admin PIN on the controller too** | For a room in a public space |
-| **New code** (control panel → Room controller) | Issues a fresh code and un-pairs every phone that has ever scanned the old one |
+| **A scanned phone can do everything** (off) | Back to the room buttons alone — join, leave, mute, camera, volume — with everything else asking for the PIN |
+| **Ask for the admin PIN on the controller too** | For a room in a public space: scanning grants nothing on its own |
+| **New code** (control panel → Room controller) | Issues a fresh code and signs out every phone that ever scanned the old one |
 
 Turn the whole thing off with **Settings → Room controller → Phone
 controller**, or hide just the code with **Show the QR code on the TV**.
@@ -437,11 +444,27 @@ gets out of the way.
 It is deliberately timid, because a room that will not start is much worse than
 a room running last month's code:
 
+**The remote branch wins.** The checkout is *reset* to it, not merged with it:
+anything edited on the Pi is discarded, and a checkout that has drifted is
+straightened out rather than skipped. A room should run the code everyone else
+can see, not a local variant nobody remembers making. Edit on your laptop, push,
+and the room picks it up.
+
+**The room's own state is not code, and is never touched.** Everything git
+ignores survives every update:
+
+| Kept | |
+| --- | --- |
+| `config/config.yaml` | The room's calendar, name, PIN, every setting |
+| `.env` | Environment overrides |
+| `var/` | Calendar cache, pairing code, background images and videos, and the Chromium profile with its signed-in room accounts |
+| `.venv/` | The virtualenv |
+
 | Situation | What happens |
 | --- | --- |
 | No network yet | Waits up to a minute, retries the fetch three times, then gives up and starts on the current version |
-| Files edited on the Pi | Left completely alone — your changes are never overwritten |
-| The branch has diverged | Only fast-forwards are taken; anything else is logged and skipped |
+| Files edited on the Pi | Discarded — the count is logged, so `journalctl` can answer "where did my edit go?" |
+| The branch has diverged | Reset onto the remote branch |
 | `requirements.txt` changed | The virtualenv is updated too |
 | A systemd unit changed | Units are reinstalled and reloaded |
 | Anything at all fails | Logged, exit 0, the room starts anyway |
@@ -1157,14 +1180,14 @@ The appliance sits on an office network in a shared room, so:
 - **The Pi itself is trusted; nothing else is.** Requests from `127.0.0.1` are
   the kiosk and local scripts. Everything else needs the PIN. `X-Forwarded-For`
   is deliberately ignored, so a remote client cannot claim to be local.
-- **The room controller is a second, weaker role, on purpose.** Scanning the
-  code on the TV pairs a phone for the room *buttons* — join, leave, mute,
-  camera, volume, show the dashboard — and nothing else. It cannot open
-  Settings, Diagnostics, the logs or a restart, and the API it uses accepts
-  that fixed list of actions and refuses everything else. The threat model is
-  the honest one for a meeting room: whoever can see the screen can already
-  walk over and press the buttons. `CONTROLLER_REQUIRE_PIN` withdraws even
-  that, for a room in a public space.
+- **The QR code on the TV signs a phone in to that room.** This is a deliberate
+  trade, not an oversight: the appliance has no keyboard, and first-run setup
+  has to be possible before a PIN exists. The threat model is the honest one for
+  a meeting room — whoever can see the screen can already walk over and press
+  the buttons on it. Two settings narrow it: `CONTROLLER_FULL_ACCESS` off leaves
+  a scanned phone with the room buttons only (join, leave, mute, camera, volume
+  — the API behind them accepts that fixed list and refuses everything else),
+  and `CONTROLLER_REQUIRE_PIN` withdraws even that.
 - **The pairing code never leaves the Pi.** It lives in `var/controller-token`
   (mode `0600`), and both the code and the QR image are served only to
   `127.0.0.1` and to signed-in administrators — the dashboard is readable from

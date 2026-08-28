@@ -14,10 +14,17 @@
 #   1. **Never leave the room worse off.** Every failure path exits 0 and logs
 #      why. A room that cannot reach GitHub at 07:58 must still show the 08:00
 #      meeting, on yesterday's code.
-#   2. **Never throw away someone's work.** A checkout with local modifications
-#      is left completely alone, and only a fast-forward is ever taken — no
-#      merge commits, no rebases, no resets.
-#   3. **Finish the job.** If the pull brought new Python dependencies or new
+#   2. **The remote is the truth.** The checkout is *reset* to the remote
+#      branch, not merged with it. Anything edited on the Pi is discarded, and
+#      a checkout that has diverged is straightened out rather than skipped —
+#      a room should run the code everyone else can see, not a local variant
+#      nobody remembers making.
+#   3. **The room's own state is not code, and is never touched.** Everything
+#      git ignores survives untouched: config/config.yaml, .env, var/ (the
+#      calendar cache, the pairing code, background images and videos, the
+#      browser profile with its signed-in accounts) and .venv/. Those are the
+#      room's identity; the repository is only its software.
+#   4. **Finish the job.** If the pull brought new Python dependencies or new
 #      systemd units, those are applied too; a half-updated appliance is worse
 #      than one that never updated.
 #
@@ -64,13 +71,6 @@ command -v git >/dev/null 2>&1 || {
 
 cd "$ROOT" || exit 0
 
-# Someone edited a file on the Pi. Pulling over the top of that would destroy
-# work and produce a version that matches no commit anywhere.
-if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-  room_log "update.local_changes" "note=staying on the current version"
-  exit 0
-fi
-
 BRANCH="$BRANCH_SETTING"
 if [ -z "$BRANCH" ]; then
   BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -105,22 +105,42 @@ if [ "$fetched" -eq 0 ]; then
   exit 0
 fi
 
-if ! timeout 60 git merge --ff-only --quiet "origin/$BRANCH" 2>/dev/null; then
-  room_log "update.not_fast_forward" "branch=$BRANCH" \
-    "note=this checkout has diverged; fix it by hand with git"
+# Note what is about to be discarded, so the journal can answer "where did my
+# edit go?" a week later.
+DIRTY="$(git status --porcelain 2>/dev/null | grep -c . || true)"
+if [ "${DIRTY:-0}" -gt 0 ]; then
+  room_log "update.discarding_local_changes" "files=$DIRTY" \
+    "note=the remote branch is the source of truth"
+fi
+
+# Reset rather than merge: the room runs what the branch says, whatever state
+# this checkout got itself into. Everything git ignores — config.yaml, .env,
+# var/ and .venv/ — is untouched by both commands, which is what keeps the
+# room's calendar, pairing code, backgrounds and signed-in browser profile.
+if ! timeout 60 git reset --hard --quiet "origin/$BRANCH" 2>/dev/null; then
+  room_log "update.reset_failed" "branch=$BRANCH" "note=keeping the current version"
   exit 0
 fi
+# -d removes stray directories, and the absence of -x is deliberate and load
+# bearing: with -x this would delete the room's configuration and state.
+timeout 60 git clean -fdq 2>/dev/null || true
 
 AFTER="$(git rev-parse HEAD 2>/dev/null)"
 
-if [ "$BEFORE" = "$AFTER" ]; then
+if [ "$BEFORE" = "$AFTER" ] && [ "${DIRTY:-0}" -eq 0 ]; then
   room_log "update.already_current" "branch=$BRANCH" "commit=${AFTER:0:8}"
   exit 0
 fi
 
 CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null)"
+if [ "$BEFORE" = "$AFTER" ]; then
+  # The branch had not moved; we only put local edits back. Reinstall
+  # dependencies and units anyway, in case that is what had been fiddled with.
+  CHANGED="$(printf 'requirements.txt\nsystemd/')"
+fi
 room_log "update.updated" "branch=$BRANCH" "from=${BEFORE:0:8}" "to=${AFTER:0:8}" \
-  "files=$(printf '%s\n' "$CHANGED" | grep -c . || true)"
+  "files=$(printf '%s\n' "$CHANGED" | grep -c . || true)" \
+  "reverted=${DIRTY:-0}"
 
 # ------------------------------------------------------ new dependencies
 if printf '%s\n' "$CHANGED" | grep -q '^requirements'; then

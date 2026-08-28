@@ -28,6 +28,9 @@ Correctness is not taken on trust: tests/test_qr.py compares the output
 module-for-module against the ``segno`` package across every level and the
 lengths where the version rolls over. ``segno`` is a development-only
 dependency and is deliberately absent from requirements.txt and the appliance.
+The one place the two disagree is padding, where segno adds a codeword the
+standard does not (see ``_encode_payload`` and the comment above the segno
+tests); everything else matches exactly.
 
 Section numbers in the comments refer to ISO/IEC 18004.
 """
@@ -289,9 +292,14 @@ def _encode_payload(payload: bytes, version: int, ec: str) -> bytearray:
     # 7.4.9: up to four zero bits mark the end, but a nearly full symbol simply
     # gets fewer of them rather than overflowing.
     bits.append(0, min(4, capacity_bits - len(bits)))
-    # 7.4.10: pad to a codeword boundary, then repeat these two filler
-    # codewords (11101100, 00010001) until the symbol is full.
+    # 7.4.10 adds padding bits only "if the bit stream length is such that it
+    # does not end at a codeword boundary". In byte mode with a full terminator
+    # it always does end on one, so this usually adds nothing -- note the `-x %
+    # 8` rather than `8 - x % 8`. (segno pads a whole zero codeword here even
+    # when it is already aligned. Both symbols scan, because a reader stops at
+    # the terminator, but every codeword after that point differs.)
     bits.append(0, -len(bits) % 8)
+    # Then repeat these two filler codewords until the symbol is full.
     padding = (0xEC, 0x11)
     index = 0
     while len(bits) < capacity_bits:

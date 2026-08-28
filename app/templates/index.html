@@ -15,6 +15,9 @@
   <div class="backdrop" id="backdrop" aria-hidden="true">
     <div class="backdrop-layer" id="backdrop-a"></div>
     <div class="backdrop-layer" id="backdrop-b"></div>
+    <!-- Video slides. No autoplay attribute: app.js starts it so a refused
+         play() can be caught and the wall can move on -->
+    <video class="backdrop-video" id="backdrop-video" muted playsinline preload="auto"></video>
     <div class="backdrop-shade" id="backdrop-shade"></div>
   </div>
 
@@ -92,6 +95,19 @@
 
   </main>
 
+  <!-- Bottom-right: scan to open the phone controller. Only the room's own
+       screen ever receives the pairing address (see _controller_hint in
+       main.py), and it is never written out as text -->
+  <aside class="controller-badge" id="controller-badge" hidden>
+    <p class="controller-caption">
+      <span class="controller-caption-title" id="controller-caption">Scan to control this room</span>
+      <span class="controller-caption-host" id="controller-host"></span>
+    </p>
+    <span class="controller-qr" id="controller-qr-tile">
+      <img class="controller-qr-image" id="controller-qr" alt="QR code for the room controller">
+    </span>
+  </aside>
+
   <!-- Full-screen overlay while someone is mirroring, in case UxPlay is not
        covering the whole screen (or is still starting up) -->
   <section class="overlay overlay-sharing" id="overlay-sharing" hidden>
@@ -113,6 +129,17 @@
     <div class="overlay-inner">
       <p class="setup-eyebrow">Nearly there</p>
       <h2 class="overlay-title">Finish setting up this room</h2>
+
+      <!-- Scanning is the whole point: a room should be set up from a phone,
+           without a keyboard ever being plugged into the Pi. The address and
+           PIN below stay as the fallback for anyone who cannot scan -->
+      <div class="setup-scan" id="setup-scan" hidden>
+        <span class="setup-qr" id="setup-qr-tile">
+          <img class="setup-qr-image" id="setup-qr" alt="QR code to set this room up">
+        </span>
+        <p class="setup-scan-text" id="setup-scan-text">Scan this to set the room up</p>
+      </div>
+
       <p class="overlay-text">On your phone or laptop, open</p>
       <p class="setup-url" id="setup-url">http://…/panel</p>
       <p class="setup-pin" id="setup-pin-row" hidden>

@@ -40,6 +40,19 @@
 
   <main class="wrap">
 
+    {% if is_admin and setup_required %}
+      <!-- A scanned phone is how this room gets configured, so this has to be
+           the loudest thing on the page until it is done. -->
+      <section class="card card-setup">
+        <h2 class="card-title">This room is not set up yet</h2>
+        <p class="card-note card-note-top">
+          It needs the room calendar's link before the TV can show meetings.
+          You can do the whole thing from this phone.
+        </p>
+        <a class="setup-cta" href="{{ url_for('settings_page') }}">Set this room up</a>
+      </section>
+    {% endif %}
+
     <!-- What is happening, and the one button that matters ---------------- -->
     <section class="hero">
       <div class="hero-status" aria-live="polite">
@@ -138,11 +151,36 @@
       </section>
     {% endif %}
 
+    {% if is_admin %}
+      <!-- Everything a keyboard plugged into the Pi used to be needed for.
+           Deliberately last and deliberately quiet: someone joining a meeting
+           should never have to scroll past it. -->
+      <section class="card card-admin">
+        <h2 class="card-title">Room setup</h2>
+        <p class="card-note card-note-top">
+          You are signed in to this room, so the rest of it is here too — no
+          keyboard needed at the Pi.
+        </p>
+        <div class="admin-links">
+          {% if panel_enabled %}
+            <a class="admin-link" href="{{ url_for('panel') }}">Control panel</a>
+          {% endif %}
+          <a class="admin-link" href="{{ url_for('settings_page') }}">All settings</a>
+          <a class="admin-link" href="{{ url_for('diagnostics_page') }}">Checks &amp; logs</a>
+        </div>
+        <div class="admin-actions">
+          <button type="button" class="admin-button" data-restart="browser">
+            Restart the TV display
+          </button>
+          <button type="button" class="admin-button" data-restart="update">
+            Check for a software update
+          </button>
+        </div>
+      </section>
+    {% endif %}
+
     <footer class="foot">
       <p class="foot-line">{{ room_name }}{% if is_admin %} · signed in as the room admin{% elif guest %} · paired with the code on the TV{% endif %}</p>
-      {% if is_admin and panel_enabled %}
-        <p class="foot-line"><a href="{{ url_for('panel') }}">Open the full control panel</a></p>
-      {% endif %}
       <p class="foot-line foot-version">Room software {{ version }}</p>
     </footer>
 

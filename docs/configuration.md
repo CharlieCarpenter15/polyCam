@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 87 options. All have working defaults; a fresh install
+There are 88 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -95,7 +95,8 @@ needs only a calendar link.
 | --- | --- | --- |
 | `CONTROLLER_ENABLED` | `true` | Phone controller. A big-button page for whoever is in the room: join, leave, mute, camera and volume. It is opened by scanning the code on the TV — no app to install and no PIN to remember. |
 | `CONTROLLER_QR_ON_TV` | `true` | Show the QR code on the TV. A small code in the bottom-right corner of the room screen. Point a phone camera at it to open the controller for this room. |
-| `CONTROLLER_LAN_ACCESS` | `false` | Let phones on the room network open the controller. Needed for the QR code to work when “Allow settings from other computers on the network” is off. It exposes the controller and the read-only dashboard only: settings, restarts and logs still need the admin PIN. Restarts: room-dashboard. |
+| `CONTROLLER_LAN_ACCESS` | `false` | Let phones on the room network open the controller. Needed for the QR code to work when “Allow settings from other computers on the network” is off. Nothing is reachable without the code on the TV or the admin PIN. Restarts: room-dashboard. |
+| `CONTROLLER_FULL_ACCESS` | `true` | A scanned phone can do everything. On, the QR code is this room's remote control: the room buttons, settings, backgrounds, restarts, logs — so a keyboard never has to be plugged into the Pi, not even for first-time setup. Off, a scanned phone gets the room buttons only and anything else asks for the admin PIN. |
 | `CONTROLLER_REQUIRE_PIN` | `false` | Ask for the admin PIN on the controller too. Turn this on for a room in a public space, where being able to see the TV should not be enough to control it. _Advanced._ |
 
 ## Display & browser

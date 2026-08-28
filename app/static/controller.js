@@ -19,7 +19,6 @@
   var SOON_MINUTES = 20;         // "starting soon" rather than "later today"
   var VOLUME_HOLD_MS = 4000;     // do not fight a finger on the slider
 
-  var state = null;              // last good payload; never cleared on failure
   var view = null;               // what the primary button currently means
   var use24 = false;
   var failures = 0;
@@ -201,6 +200,17 @@
       return result;
     }
 
+    var cal = payload.calendar || {};
+    var knowsNothing = !payload.current && !(payload.upcoming || []).length;
+    if (cal.configured && cal.ok === false && !cal.stale && knowsNothing) {
+      result.headline = "The calendar is not answering";
+      result.hint = "The room cannot read its calendar, so it does not know what is " +
+        "booked in here" + (cal.error ? " (" + cal.error + ")" : "") + ". It keeps " +
+        "trying. You can still share your screen with " + screen + ".";
+      result.note = "Nothing to join until the calendar comes back.";
+      return result;
+    }
+
     if (payload.mode === "offline" || payload.network_ok === false) {
       result.headline = "The room is offline";
       result.hint = "This room has lost its network connection, so it cannot open a " +
@@ -302,9 +312,8 @@
   function renderHero(payload) {
     view = describe(payload);
 
-    var trouble = calendarTrouble(payload);
     setText("mode-line", view.headline);
-    setText("hint-line", trouble ? view.hint + " " + trouble : view.hint);
+    setText("hint-line", view.hint);
 
     var button = $("primary-action");
     if (!button.classList.contains("busy")) {
@@ -337,10 +346,10 @@
       camera: "switched the camera",
       home: "put the dashboard back"
     };
-    var where = remote.source === "remote" ? "On the room remote" : "From another phone";
-    var what = remote.detail || phrases[remote.action] || "a button was pressed";
-    var failed = remote.ok === false ? " (that did not work)" : "";
-    el.textContent = where + ": " + what + failed;
+    var where = remote.source === "remote" ? "on the room remote" : "from another phone";
+    var what = phrases[remote.action] || "pressed a button";
+    var failed = remote.ok === false ? " — that did not work" : "";
+    el.textContent = "Someone " + what + " " + where + failed + ".";
     show(el, true);
   }
 
@@ -410,11 +419,10 @@
     if (!rows.length) {
       list.innerHTML = "";
       var cal = payload.calendar || {};
-      var message = "Nothing else booked in this room today.";
+      var message = "Nothing booked in this room for the rest of the day.";
       if (!cal.configured) message = "No calendar is connected to this room yet.";
-      else if (cal.ok === false) {
-        message = "The room cannot read the calendar right now" + (cal.error ? ": " + cal.error : ".");
-      }
+      // The reason is already spelled out in the hero; do not print it twice.
+      else if (cal.ok === false) message = "The room cannot read the calendar right now.";
       empty.textContent = message;
       show(empty, true);
       return;
@@ -476,7 +484,6 @@
   }
 
   function render(payload) {
-    state = payload;
     use24 = !!payload.time_format_24h;
     renderHero(payload);
     renderEcho(payload);
@@ -564,11 +571,14 @@
     });
   }
 
+  /* Delegated, because the list is rewritten on every poll and a listener per
+     row would go with it. */
   function onMeetingClick(event) {
     var node = event.target;
-    while (node && node !== this && !node.getAttribute) node = node.parentNode;
-    while (node && node !== this && !node.getAttribute("data-join")) node = node.parentNode;
-    if (!node || node === this) return;
+    while (node && node !== this && node.getAttribute && !node.getAttribute("data-join")) {
+      node = node.parentNode;
+    }
+    if (!node || node === this || !node.getAttribute || !node.getAttribute("data-join")) return;
     runAction(node, {
       action: "join",
       body: { meeting_id: node.getAttribute("data-join") },
@@ -648,9 +658,42 @@
 
     $("meeting-list").addEventListener("click", onMeetingClick);
 
+    wireAdminActions();
+
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) refreshNow();
     });
+  }
+
+  /* The "Room setup" card is rendered only for a signed-in phone, so these
+     buttons may not exist at all. They talk to /api/actions/*, not the
+     controller API, because they are administrator actions. */
+  function wireAdminActions() {
+    var buttons = document.querySelectorAll("[data-restart]");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener("click", onRestartClick);
+    }
+  }
+
+  function onRestartClick() {
+    var button = this;
+    var target = button.getAttribute("data-restart");
+    if (button.disabled) return;
+    var original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Working…";
+
+    R.post("/api/actions/restart", { target: target })
+      .then(function (data) {
+        R.toast((data && data.detail) || "Done.", "ok");
+      })
+      .catch(function (error) {
+        R.toast(error.message || "That did not work.", "error");
+      })
+      .then(function () {
+        button.disabled = false;
+        button.textContent = original;
+      });
   }
 
   // ---------------------------------------------------------------- polling

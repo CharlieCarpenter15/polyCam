@@ -13,13 +13,18 @@ The rules, in plain terms:
 * **Background services** (the AirPlay supervisor, the watchdog) authenticate
   with a shared secret from a root-readable file instead of a cookie, so they are
   unaffected by the above.
-* **The room controller** is a deliberately weaker, narrower role. Whoever can
-  see the TV can scan the code in its corner and press Join, Leave, Mute,
-  Camera and Volume from their phone — the same buttons a physical remote has,
-  and nothing more. It never reaches settings, restarts, logs or the
-  configuration, so the worst a stranger with a long lens can do is hang up a
-  call in a room they are looking at. Turn on ``CONTROLLER_REQUIRE_PIN`` where
-  even that is too much.
+* **The room controller** is the QR code on the TV, and what it grants is a
+  deliberate choice with two settings behind it. By default
+  (``CONTROLLER_FULL_ACCESS``) scanning it makes that phone an administrator:
+  the appliance is a Pi on a wall with no keyboard, and the point of the code
+  is that a phone can do everything a keyboard could — including the first-run
+  setup, which has to happen before a PIN exists to ask for. The code is shown
+  on the room's own screen and served nowhere else, so the trade is "whoever
+  can see this screen can run this room", which is close to what standing in
+  the room already means. Turn ``CONTROLLER_FULL_ACCESS`` off and a scanned
+  phone gets the room buttons only — join, leave, mute, camera, volume, the
+  set a physical remote has — with everything else asking for the PIN. Turn on
+  ``CONTROLLER_REQUIRE_PIN`` and scanning grants nothing without it.
 
 PIN checks use a constant-time comparison and are rate-limited per client.
 """
@@ -237,16 +242,48 @@ def pair_controller(submitted: str) -> bool:
     pin_guard.clear(address)
     session[CONTROLLER_SESSION_KEY] = controller_fingerprint()
     session.permanent = True
+
+    # A Raspberry Pi on a wall has no keyboard, and the first-run setup has to
+    # happen before there is a PIN to ask for. So by default the phone that
+    # scanned the room's own screen becomes that room's administrator.
+    config = current_app.config.get("ROOM_CONFIG")
+    full = config is None or config.bool_("CONTROLLER_FULL_ACCESS")
+    if config is not None and config.bool_("CONTROLLER_REQUIRE_PIN"):
+        full = False
+    if full:
+        session["admin"] = True
+
     csrf_token()
-    log_event(log, logging.INFO, "web.controller_paired", address=address)
+    log_event(log, logging.INFO, "web.controller_paired", address=address, full=full)
     return True
+
+
+def controller_grant_expired() -> bool:
+    """True when this session's rights came from a code that has been replaced.
+
+    Pairing can hand out administrator access, so "New code" has to take that
+    back too — otherwise the button would revoke the small permission and leave
+    the large one standing.
+    """
+    paired = session.get(CONTROLLER_SESSION_KEY)
+    if not isinstance(paired, str) or not paired:
+        return False
+    return not hmac.compare_digest(paired, controller_fingerprint())
 
 
 def is_admin() -> bool:
     """True when this request may change things."""
     if is_local_request():
         return True
-    return bool(session.get("admin"))
+    if not session.get("admin"):
+        return False
+    # Admin rights that came from a pairing code die with that code. A PIN
+    # sign-in leaves no pairing stamp behind, so it is unaffected.
+    if controller_grant_expired():
+        session.pop("admin", None)
+        session.pop(CONTROLLER_SESSION_KEY, None)
+        return False
+    return True
 
 
 def is_controller() -> bool:

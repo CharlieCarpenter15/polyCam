@@ -27,6 +27,35 @@
     <p class="block-note" id="active-note" hidden></p>
   </section>
 
+  <!-- Room controller ------------------------------------------------------
+       The QR code lives here as well as on the TV: an administrator standing
+       at the panel can hand the room to someone without walking them over to
+       the screen. -->
+  {% if controller_enabled %}
+  <section class="block">
+    <div class="block-head">
+      <h2 class="block-title">Room controller</h2>
+    </div>
+    <div class="block-body qr-row">
+      <img class="qr" id="controller-qr" src="/qr/controller.svg?scale=6"
+           alt="Pairing code for the room controller" width="160" height="160">
+      <div class="qr-text">
+        <p class="block-note" style="margin:0 0 12px">
+          Anyone in the room can point a phone camera at this and get the big-button
+          controls — join, leave, mute, volume, camera. The same code is on the TV.
+        </p>
+        <div class="btn-row">
+          <a class="btn btn-small" href="{{ url_for('controller_page') }}">Open the controller</a>
+          <button class="btn btn-small btn-danger" id="controller-code">New code</button>
+        </div>
+        <p class="block-note" style="margin:10px 0 0">
+          A new code un-pairs every phone that scanned the old one.
+        </p>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
   <!-- Meetings ----------------------------------------------------------- -->
   <section class="block">
     <div class="block-head">
@@ -77,6 +106,8 @@
             Seconds per image <span id="seconds-value">45</span>
           </label>
           <input type="range" id="background-seconds" min="5" max="300" step="5" value="45">
+          <p class="field-help">Stills only. A video is never cut off — it plays
+            all the way through, then the slideshow moves on.</p>
         </div>
         <div class="field">
           <label class="field-label" for="background-dim">
@@ -88,16 +119,30 @@
           <label class="switch">
             <span class="switch-text">
               <span class="field-label" style="margin:0">Shuffle</span>
-              <span class="field-help" style="margin:0">Play images in random order.</span>
+              <span class="field-help" style="margin:0">Play slides in random order.</span>
             </span>
             <input type="checkbox" id="background-shuffle">
+            <span class="switch-track"></span>
+          </label>
+        </div>
+        <div class="field">
+          <label class="switch">
+            <span class="switch-text">
+              <span class="field-label" style="margin:0">Sound on videos</span>
+              <span class="field-help" style="margin:0">
+                Usually leave this off — wallpaper talking over a meeting is worse
+                than a silent clip.
+              </span>
+            </span>
+            <input type="checkbox" id="background-video-sound">
             <span class="switch-track"></span>
           </label>
         </div>
       </div>
 
       <div class="thumb-grid" id="thumb-grid"></div>
-      <input type="file" id="upload-input" accept="image/jpeg,image/png,image/gif,image/webp"
+      <input type="file" id="upload-input"
+             accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime"
              multiple hidden>
       <p class="block-note" style="margin-left:0" id="upload-note"></p>
     </div>

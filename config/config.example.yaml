@@ -224,9 +224,15 @@ CONTROLLER_ENABLED: true
 CONTROLLER_QR_ON_TV: true
 
 # Needed for the QR code to work when “Allow settings from other computers
-# on the network” is off. It exposes the controller and the read-only
-# dashboard only: settings, restarts and logs still need the admin PIN.
+# on the network” is off. Nothing is reachable without the code on the TV
+# or the admin PIN.
 CONTROLLER_LAN_ACCESS: false
+
+# On, the QR code is this room's remote control: the room buttons,
+# settings, backgrounds, restarts, logs — so a keyboard never has to be
+# plugged into the Pi, not even for first-time setup. Off, a scanned phone
+# gets the room buttons only and anything else asks for the admin PIN.
+CONTROLLER_FULL_ACCESS: true
 
 # Turn this on for a room in a public space, where being able to see the
 # TV should not be enough to control it.

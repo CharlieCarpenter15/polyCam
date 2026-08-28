@@ -614,7 +614,8 @@ class TestRoomController:
             "join_available", "audio", "sharing", "network_ok", "calendar",
         ):
             assert key in payload, f"the controller needs {key}"
-        assert payload["is_admin"] is False
+        # The page uses this to decide whether to offer settings and repairs.
+        assert payload["is_admin"] is True
 
     def test_the_room_buttons_work(self, app):
         phone, csrf = self._paired(app)
@@ -647,12 +648,47 @@ class TestRoomController:
     @pytest.mark.parametrize(
         "path", ["/api/settings", "/api/diagnostics", "/api/logs", "/settings"]
     )
-    def test_a_paired_phone_is_not_an_administrator(self, app, path):
+    def test_scanning_the_code_hands_over_the_whole_room(self, app, path):
+        """The default: the code replaces the keyboard nobody wants to plug in."""
+        phone, _ = self._paired(app)
+        assert phone.get(path, environ_overrides=self.PHONE).status_code == 200, path
+
+    def test_a_scanned_phone_can_set_the_room_up_from_scratch(self, app, mock_config):
+        """First-run setup happens before any PIN exists, so it cannot need one."""
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/settings",
+            json={"ROOM_NAME": "Boardroom"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 200, response.get_json()
+        assert mock_config.str_("ROOM_NAME") == "Boardroom"
+
+    @pytest.mark.parametrize(
+        "path", ["/api/settings", "/api/diagnostics", "/api/logs", "/settings"]
+    )
+    def test_restricted_mode_keeps_a_phone_to_the_room_buttons(
+        self, app, mock_config, path
+    ):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
         phone, _ = self._paired(app)
         response = phone.get(path, environ_overrides=self.PHONE)
         assert response.status_code in (302, 401), path
 
-    def test_a_paired_phone_cannot_restart_the_room(self, app):
+    def test_restricted_mode_still_presses_the_room_buttons(self, app, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/controller/action",
+            json={"action": "home"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 200
+
+    def test_restricted_mode_cannot_restart_the_room(self, app, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
         phone, csrf = self._paired(app)
         response = phone.post(
             "/api/actions/restart",
@@ -683,12 +719,24 @@ class TestRoomController:
         assert response.status_code == 200
         assert response.headers["Content-Type"].startswith("image/svg+xml")
         body = response.get_data(as_text=True)
-        assert body.lstrip().startswith("<svg") and "rect" in body
+        assert "<svg" in body and "viewBox" in body
+        assert self._code() not in body, "the code is scanned, never written out"
 
-    def test_the_code_is_not_served_to_the_network(self, app):
-        """The image *is* the secret: a phone must scan it off the TV."""
+    def test_the_code_is_not_served_to_the_network(self, app, client, mock_config):
+        """The image *is* the secret: it has to be read off the room's screen.
+
+        A phone that has already scanned it is a different matter — it has the
+        code by definition — so the check is that a stranger cannot fetch it.
+        """
+        assert client.get(
+            "/qr/controller.svg", environ_overrides=self.PHONE
+        ).status_code == 404
+
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
         phone, _ = self._paired(app)
-        assert phone.get("/qr/controller.svg", environ_overrides=self.PHONE).status_code == 404
+        assert phone.get(
+            "/qr/controller.svg", environ_overrides=self.PHONE
+        ).status_code == 404
 
     def test_the_dashboard_tells_the_kiosk_where_the_controller_is(self, client, mock_config):
         mock_config.update({"ADMIN_PIN": "4242", "ADMIN_LAN_ACCESS": True})

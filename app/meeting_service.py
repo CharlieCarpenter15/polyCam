@@ -372,6 +372,13 @@ class MeetingService:
         if not meeting.has_link:
             return False
 
+        # Clear a mirroring session so the meeting is actually visible. This
+        # happens before the lock on purpose: stopping the mirror fires the
+        # AirPlay callback, which ticks the room, which can come straight back
+        # in here — and the lock below is not reentrant.
+        if self.airplay.sharing:
+            self.airplay.force_stop_sharing()
+
         with self._open_lock:
             if self._already_open(meeting):
                 self.browser.bring_to_front()
@@ -380,10 +387,6 @@ class MeetingService:
                     provider=meeting.provider_id or "unknown", manual=manual,
                 )
                 return True
-
-            # Clear a mirroring session so the meeting is actually visible.
-            if self.airplay.sharing:
-                self.airplay.force_stop_sharing()
 
             ok = self.browser.open_meeting(
                 meeting, reason="pressed Join" if manual else "scheduled start"
@@ -522,11 +525,12 @@ class MeetingService:
                 "detail": f"Volume {level}%" if level is not None else "No speaker is available",
             }
         if action == "camera":
-            pressed = bool(self.browser.toggle_meeting_camera())
-            if pressed:
-                self._camera_on = not self._camera_on
-            if not pressed:
+            if not self.browser.toggle_meeting_camera():
                 return {"ok": False, "detail": "No camera control on this page"}
+            # The page never reports which way its control went, so the room
+            # keeps its own idea of the camera and words the confirmation from
+            # that. It starts each meeting on, which is how they all start.
+            self._camera_on = not self._camera_on
             return {
                 "ok": True,
                 "detail": "Camera turned on" if self._camera_on else "Camera turned off",

@@ -52,6 +52,18 @@ TARGET_DASHBOARD = "dashboard"
 TARGET_MEETING = "meeting"
 TARGET_UNKNOWN = "unknown"
 
+#: How the join loop is paced. Named rather than sprinkled through the loop so
+#: the whole rhythm is visible in one place — and so the tests can run a full
+#: attempt in milliseconds instead of seconds.
+PASS_INTERVAL_SECONDS = 2.0
+#: A click usually moves the page on, so give it a moment longer.
+CLICK_INTERVAL_SECONDS = 3.0
+#: While waiting to be admitted there is nothing to press, only to watch for.
+LOBBY_POLL_SECONDS = 3.0
+#: Ceilings for the gentle backoff when nothing matches, or the page is unwell.
+MAX_INTERVAL_SECONDS = 6.0
+MAX_ERROR_INTERVAL_SECONDS = 8.0
+
 #: How long the room keeps watching a lobby screen. Waiting to be admitted is
 #: success in progress rather than a failure, so it is allowed to outlast the
 #: join deadline — but not for ever: after this the room stops watching and
@@ -234,6 +246,8 @@ class BrowserService:
             log_event(log, logging.WARNING, "meeting.no_link", meeting=meeting.uid)
             return False
 
+        # Stop the old attempt before navigating: a loop left running would
+        # start pressing buttons on whatever page loads next.
         self._stop_join_automation()
         url = prepare_url(meeting.provider_id, meeting.join_url)
 
@@ -275,10 +289,10 @@ class BrowserService:
 
         The old code shared one stop event between attempts and *cleared* it
         here. A thread parked in an eight-second ``evaluate`` outlived the
-        three-second join below, woke up, found the flag clear and carried on
-        clicking alongside the new attempt — two loops, one page, a meeting
-        joined twice. Now every attempt owns its event and a generation number,
-        and neither is ever handed back.
+        three seconds _stop_join_automation waits for it, woke up, found the
+        flag clear and carried on clicking alongside the new attempt — two
+        loops, one page, a meeting joined twice. Now every attempt owns its
+        event and its generation number, and neither is ever handed back.
         """
         self._stop_join_automation()
         attempt = JoinAttempt(
@@ -406,7 +420,7 @@ class BrowserService:
         if self._join_wait(stop, generation, meeting.uid, settle):
             return
 
-        interval = 2.0
+        interval = PASS_INTERVAL_SECONDS
         while not self._join_cancelled(stop, generation, meeting.uid):
             now = time.monotonic()
             in_lobby = lobby_deadline is not None and now < lobby_deadline
@@ -456,7 +470,7 @@ class BrowserService:
                             log, logging.INFO, "meeting.join_waiting_to_be_admitted",
                             provider=meeting.provider_id, page_says=waiting[:60],
                         )
-                    interval = 3.0
+                    interval = LOBBY_POLL_SECONDS
                 elif payload.get("filled_name"):
                     # The name went in and Join is still disabled; the click is
                     # the next pass's job, once the page has caught up.
@@ -465,7 +479,7 @@ class BrowserService:
                         log, logging.DEBUG, "meeting.join_name_filled",
                         provider=meeting.provider_id, pass_number=attempt.passes,
                     )
-                    interval = 2.0
+                    interval = PASS_INTERVAL_SECONDS
                 elif clicked:
                     attempt.clicks.append(clicked[:60])
                     recent_clicks[clicked.strip().lower()] = (
@@ -477,8 +491,7 @@ class BrowserService:
                         provider=meeting.provider_id, button=clicked[:40],
                         pass_number=attempt.passes,
                     )
-                    # A click usually triggers a page change; give it room.
-                    interval = 3.0
+                    interval = CLICK_INTERVAL_SECONDS
                 else:
                     if guard:
                         log_event(
@@ -486,13 +499,13 @@ class BrowserService:
                             provider=meeting.provider_id,
                             buttons=",".join(text for text, _ in guard),
                         )
-                    interval = min(6.0, interval * 1.4)
+                    interval = min(MAX_INTERVAL_SECONDS, interval * 1.4)
             except CDPError as exc:
                 attempt.error = str(exc)
                 log_event(
                     log, logging.DEBUG, "meeting.join_probe_failed", error=str(exc)[:120]
                 )
-                interval = min(8.0, interval * 1.6)
+                interval = min(MAX_ERROR_INTERVAL_SECONDS, interval * 1.6)
             except (TypeError, ValueError) as exc:
                 attempt.error = f"unreadable automation result: {exc}"
 

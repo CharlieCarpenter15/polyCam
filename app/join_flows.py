@@ -226,7 +226,6 @@ _CLICKER_JS = r"""
     "waiting for the host",
     "wait for the host",
     "waiting for the meeting to start",
-    "when someone lets you in",
     "someone lets you in",
     "let you in soon",
     "lets you in soon",
@@ -247,11 +246,13 @@ _CLICKER_JS = r"""
     for (var i = 0; i < LOBBY.length; i++) {
       if (text.indexOf(LOBBY[i]) !== -1) return LOBBY[i];
     }
-    // "Please wait" alone is far too common to trust; only believe it next to
-    // something about joining.
+    // "Please wait" alone is far too common to trust — a page still loading
+    // says it too — and every pre-join screen contains the word "join", so the
+    // context has to be someone letting the room in.
     if (text.indexOf("please wait") !== -1 &&
-        (text.indexOf("host") !== -1 || text.indexOf("join") !== -1 ||
-         text.indexOf("admit") !== -1 || text.indexOf("let you in") !== -1)) {
+        (text.indexOf("host") !== -1 || text.indexOf("admit") !== -1 ||
+         text.indexOf("let you in") !== -1 || text.indexOf("organiser") !== -1 ||
+         text.indexOf("organizer") !== -1)) {
       return "please wait";
     }
     return "";

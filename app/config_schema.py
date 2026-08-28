@@ -431,10 +431,21 @@ FIELDS: tuple[Field, ...] = (
         group="controller",
         label="Let phones on the room network open the controller",
         help="Needed for the QR code to work when “Allow settings from other "
-        "computers on the network” is off. It exposes the controller and the "
-        "read-only dashboard only: settings, restarts and logs still need the "
-        "admin PIN.",
+        "computers on the network” is off. Nothing is reachable without the "
+        "code on the TV or the admin PIN.",
         restart_units=("room-dashboard.service",),
+    ),
+    Field(
+        key="CONTROLLER_FULL_ACCESS",
+        type="bool",
+        default=True,
+        group="controller",
+        label="A scanned phone can do everything",
+        help="On, the QR code is this room's remote control: the room buttons, "
+        "settings, backgrounds, restarts, logs — so a keyboard never has to be "
+        "plugged into the Pi, not even for first-time setup. Off, a scanned "
+        "phone gets the room buttons only and anything else asks for the admin "
+        "PIN.",
     ),
     Field(
         key="CONTROLLER_REQUIRE_PIN",
