@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 78 options. All have working defaults; a fresh install
+There are 79 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -43,6 +43,7 @@ needs only a calendar link.
 | `AUTO_OPEN_MEETING` | `true` | Open meetings automatically. Navigate the TV to the meeting shortly before it starts. |
 | `AUTO_OPEN_MINUTES` | `1.0` | Open this many minutes early. 1 means the meeting page opens about one minute before the start time. (min 0, max 30) |
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join automatically. Best effort. Teams, Meet and Zoom change their web pages without notice, so if this fails the big JOIN button on the dashboard always works. |
+| `JOIN_SETTLE_SECONDS` | `0.0` | Wait before pressing anything (seconds). 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower hardware: pressing buttons on a page that has not finished drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40. (min 0, max 120) _Advanced._ |
 | `AUTO_JOIN_TIMEOUT_SECONDS` | `90` | Give up on auto-join after (seconds). (min 10, max 600) _Advanced._ |
 | `RETURN_HOME_MINUTES` | `2.0` | Return to dashboard after (minutes). Grace period after a meeting's scheduled end before the TV goes back to the room screen. (min 0, max 120) |
 | `MAX_MEETING_MINUTES` | `240` | Hard limit on a meeting screen (minutes). Safety net: the appliance never stays on a meeting page longer than this, even if the calendar goes strange. (min 10, max 1440) _Advanced._ |

@@ -79,6 +79,11 @@ AUTO_OPEN_MINUTES: 1.0
 # so if this fails the big JOIN button on the dashboard always works.
 AUTO_CLICK_JOIN: true
 
+# 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower
+# hardware: pressing buttons on a page that has not finished drawing
+# wastes the whole join attempt. A Raspberry Pi 3 may need 25–40.
+JOIN_SETTLE_SECONDS: 0.0
+
 AUTO_JOIN_TIMEOUT_SECONDS: 90
 
 # Grace period after a meeting's scheduled end before the TV goes back to

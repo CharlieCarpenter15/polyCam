@@ -300,6 +300,19 @@ FIELDS: tuple[Field, ...] = (
         "notice, so if this fails the big JOIN button on the dashboard always works.",
     ),
     Field(
+        key="JOIN_SETTLE_SECONDS",
+        type="float",
+        default=0.0,
+        minimum=0.0,
+        maximum=120.0,
+        group="meetings",
+        label="Wait before pressing anything (seconds)",
+        help="0 uses a sensible per-provider default (6–8 seconds). Raise it on "
+        "slower hardware: pressing buttons on a page that has not finished "
+        "drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40.",
+        advanced=True,
+    ),
+    Field(
         key="AUTO_JOIN_TIMEOUT_SECONDS",
         type="int",
         default=90,

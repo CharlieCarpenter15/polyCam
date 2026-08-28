@@ -283,8 +283,15 @@ class BrowserService:
         )
         in_call_script = build_in_call_script()
 
-        # Let the page load before poking at it.
-        if self._join_stop.wait(timeout=flow.settle_seconds):
+        # Let the page load before poking at it. Clicking into a half-drawn
+        # page is worse than waiting: the buttons are not there yet, and on
+        # slow hardware the whole attempt can expire before the page is ready.
+        settle = self.config.float_("JOIN_SETTLE_SECONDS") or flow.settle_seconds
+        log_event(
+            log, logging.DEBUG, "meeting.join_waiting_for_page",
+            provider=meeting.provider_id, seconds=settle,
+        )
+        if self._join_stop.wait(timeout=settle):
             return
 
         interval = 2.0

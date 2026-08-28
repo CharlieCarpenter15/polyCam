@@ -8,6 +8,7 @@
 #
 #   roomctl status                     how is the room?
 #   roomctl screen                     why is the TV blank / white / wrong?
+#   roomctl slow-device on|off         retune for a Pi 3 / older hardware
 #   roomctl doctor                     run every hardware check
 #   roomctl restart [what]             browser | airplay | remote | backend | all
 #   roomctl start|stop [what]
@@ -37,7 +38,7 @@ dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 green(){ printf '\033[32m%s\033[0m\n' "$*"; }
 
-usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
 py() {
   local python
@@ -400,6 +401,44 @@ cmd_lan_admin() {
   esac
 }
 
+cmd_slow_device() {
+  # A Pi 3 is roughly five times slower than a Pi 5 and has a quarter of the
+  # memory. The defaults assume a Pi 5, so on older hardware the appliance
+  # starts pressing join buttons before the meeting page has finished drawing
+  # and can run out of time before it is ready. This retunes the timings and
+  # drops the work the dashboard does between meetings.
+  case "${1:-}" in
+    on)
+      bold "Retuning for slower hardware"
+      cmd_set AUTO_OPEN_MINUTES 4              # open the page well before the start
+      cmd_set JOIN_SETTLE_SECONDS 30           # let it finish drawing first
+      cmd_set AUTO_JOIN_TIMEOUT_SECONDS 300    # keep trying for five minutes
+      cmd_set CALENDAR_REFRESH_SECONDS 60      # half the calendar work
+      cmd_set HEALTH_CHECK_SECONDS 30          # half the monitoring work
+      cmd_set BACKGROUND_MODE theme            # no image decoding or crossfades
+      printf '\n'
+      dim "Applied. Restarting the room software so it takes effect."
+      cmd_units restart backend
+      printf '\n'
+      dim "This gives the join automation a much better chance. It cannot make"
+      dim "the video call itself smooth — see the hardware note in README.md."
+      ;;
+    off)
+      bold "Restoring the standard timings"
+      cmd_set AUTO_OPEN_MINUTES 1
+      cmd_set JOIN_SETTLE_SECONDS 0
+      cmd_set AUTO_JOIN_TIMEOUT_SECONDS 90
+      cmd_set CALENDAR_REFRESH_SECONDS 30
+      cmd_set HEALTH_CHECK_SECONDS 15
+      cmd_units restart backend
+      ;;
+    *)
+      red "Usage: roomctl slow-device on | off"
+      exit 1
+      ;;
+  esac
+}
+
 cmd_doctor() {
   bold "1/3  Conference bar"
   "$HERE/detect-poly.sh" || true
@@ -455,6 +494,7 @@ case "$COMMAND" in
   screen | tv)       cmd_screen ;;
   panel | url)       cmd_panel ;;
   doctor | check)    cmd_doctor ;;
+  slow-device | slow) cmd_slow_device "$@" ;;
   restart)           cmd_units restart "$@" ;;
   start)             cmd_units start "$@" ;;
   stop)              cmd_units stop "$@" ;;
