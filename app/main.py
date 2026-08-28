@@ -37,7 +37,7 @@ from flask import (
 
 from . import __version__, paths
 from .airplay_service import AirPlayService
-from .background_service import BackgroundService
+from .background_service import MAX_VIDEO_BYTES, BackgroundService
 from .browser_service import BrowserService
 from .calendar_service import CalendarService
 from .config import ConfigManager, advisories, get_config
@@ -168,8 +168,10 @@ def create_app(config: ConfigManager | None = None, *, start_services: bool = Tr
         SESSION_COOKIE_SAMESITE="Strict",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         JSON_SORT_KEYS=False,
-        # Cap request bodies so an upload cannot exhaust memory or disk.
-        MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+        # Cap request bodies so an upload cannot exhaust memory or disk. The
+        # cap has to clear the largest thing the slideshow accepts — a video —
+        # or Flask rejects it before background_service can say why.
+        MAX_CONTENT_LENGTH=MAX_VIDEO_BYTES + 4 * 1024 * 1024,
         TEMPLATES_AUTO_RELOAD=config.bool_("DEV_MODE"),
     )
 
@@ -325,6 +327,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     def api_state():
         """Everything the dashboard renders, in one call."""
         payload = appliance.room.dashboard_payload()
+        media = appliance.backgrounds.list_media()
         payload["backgrounds"] = {
             "mode": config.str_("BACKGROUND_MODE"),
             "seconds": config.int_("BACKGROUND_SLIDESHOW_SECONDS"),
@@ -332,7 +335,12 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "dim": config.int_("BACKGROUND_DIM_PERCENT"),
             "blur": config.int_("BACKGROUND_BLUR_PIXELS"),
             "solid": config.str_("BACKGROUND_SOLID_COLOR"),
-            "images": [image.to_dict()["url"] for image in appliance.backgrounds.list_images()],
+            # "images" stays what it always was — URLs that can be painted as a
+            # CSS background — so a still slideshow never has to know videos
+            # exist. "media" is the full list, in order, for the player.
+            "images": [item.to_dict()["url"] for item in media if not item.is_video],
+            "media": [item.to_dict() for item in media],
+            "video_sound": config.bool_("BACKGROUND_VIDEO_SOUND"),
         }
         payload["display"] = {
             "show_instructions": config.bool_("SHOW_SHARING_INSTRUCTIONS"),
@@ -654,6 +662,11 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "airplay": ("room-airplay.service", "AirPlay is restarting."),
             "remote": ("room-remote.service", "The remote handler is restarting."),
             "backend": ("room-dashboard.service", "The room software is restarting."),
+            "update": (
+                "room-update.service",
+                "Checking for a software update. The room restarts itself if "
+                "there is one.",
+            ),
         }
 
         if target == "all":
@@ -818,19 +831,19 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     @require_csrf
     def api_backgrounds_upload():
         if not config.bool_("BACKGROUND_ALLOW_UPLOADS"):
-            return fail("Image uploads are switched off in Settings.", 409)
-        uploaded = request.files.get("image")
+            return fail("Background uploads are switched off in Settings.", 409)
+        uploaded = request.files.get("image") or request.files.get("file")
         if uploaded is None:
-            return fail("No image was attached.")
-        image, error = appliance.backgrounds.save(
+            return fail("No file was attached.")
+        item, error = appliance.backgrounds.save(
             uploaded.stream, declared_name=uploaded.filename or ""
         )
-        if image is None:
+        if item is None:
             return fail(error)
-        # Uploading the first image is a clear signal the slideshow is wanted.
+        # Uploading the first one is a clear signal the slideshow is wanted.
         if config.str_("BACKGROUND_MODE") == "theme" and appliance.backgrounds.count() == 1:
             config.update({"BACKGROUND_MODE": "slideshow"})
-        return ok(image=image.to_dict(), count=appliance.backgrounds.count())
+        return ok(image=item.to_dict(), count=appliance.backgrounds.count())
 
     @app.route("/api/backgrounds/<name>", methods=["DELETE"])
     @require_admin
@@ -838,7 +851,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     def api_backgrounds_delete(name: str):
         if appliance.backgrounds.delete(name):
             return ok(count=appliance.backgrounds.count())
-        return fail("That image is not in the slideshow.", 404)
+        return fail("That file is not in the slideshow.", 404)
 
     @app.route("/media/backgrounds/<name>")
     def media_background(name: str):

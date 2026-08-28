@@ -1,0 +1,30 @@
+# Room appliance: pull the latest room software at boot.
+#
+# One-shot, ordered before the backend and the kiosk, so the room comes up on
+# the current version without anyone having to SSH in. It can never stop the
+# room starting: the script exits 0 on every failure path, and nothing else is
+# ordered to wait for it succeeding — only for it finishing.
+
+[Unit]
+Description=Meeting room software update
+Documentation=file://__ROOM_DIR__/README.md
+After=network-online.target
+Wants=network-online.target
+Before=room-dashboard.service room-kiosk.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/scripts/update-on-boot.sh
+
+# A hung fetch must not hold the room's boot up for longer than this.
+TimeoutStartSec=900
+
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-update
+
+[Install]
+WantedBy=default.target

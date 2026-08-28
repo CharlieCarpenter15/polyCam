@@ -44,6 +44,7 @@ network. No keyboard, no YAML, no SSH.
 - [The control panel](#the-control-panel)
 - [The room controller (scan the code)](#the-room-controller-scan-the-code)
 - [Background slideshow](#background-slideshow)
+- [Keeping the software up to date](#keeping-the-software-up-to-date)
 - [Poly conference bar](#poly-conference-bar)
 - [Poly remote / controller](#poly-remote--controller)
 - [AirPlay screen sharing](#airplay-screen-sharing)
@@ -401,11 +402,20 @@ controller**, or hide just the code with **Show the QR code on the TV**.
 
 ## Background slideshow
 
-By default the dashboard uses a built-in gradient. To use your own photos:
+By default the dashboard uses a built-in gradient. To use your own photos and
+video:
 
 1. Control panel → **Background**
-2. **+ Add images** — JPEG, PNG, GIF or WebP, up to 12 MB each, 60 images total
+2. **+ Add images or video** — JPEG, PNG, GIF or WebP up to 12 MB each, MP4,
+   WebM or MOV up to 200 MB each, 60 files in total
 3. Adjust **Seconds per image**, **Darken for readability** and **Shuffle**
+
+**Videos play in full.** *Seconds per image* is what it says — it applies to
+stills. A video is never cut off part way: it plays to its end and only then
+does the slideshow move on. Sound is off unless you turn on **Play sound with
+background videos**, and a clip the TV cannot decode (an iPhone HEVC recording,
+usually) is skipped rather than left as a black screen. For a wall loop, H.264
+MP4 is the safe choice on a Raspberry Pi.
 
 Uploading your first image switches the background to slideshow mode
 automatically. Images crossfade, and the darkening layer keeps the clock and
@@ -415,6 +425,57 @@ read from across the room.
 Uploads are checked by their actual file contents, not their filename, so a
 renamed file cannot slip something else onto the screen. Images are stored in
 `var/backgrounds`.
+
+---
+
+## Keeping the software up to date
+
+The room updates itself when it boots. `room-update.service` runs before the
+dashboard and the kiosk start, pulls the branch this Pi was installed from, and
+gets out of the way.
+
+It is deliberately timid, because a room that will not start is much worse than
+a room running last month's code:
+
+| Situation | What happens |
+| --- | --- |
+| No network yet | Waits up to a minute, retries the fetch three times, then gives up and starts on the current version |
+| Files edited on the Pi | Left completely alone — your changes are never overwritten |
+| The branch has diverged | Only fast-forwards are taken; anything else is logged and skipped |
+| `requirements.txt` changed | The virtualenv is updated too |
+| A systemd unit changed | Units are reinstalled and reloaded |
+| Anything at all fails | Logged, exit 0, the room starts anyway |
+
+**Update now, without rebooting**
+
+```bash
+./scripts/roomctl update          # pull, then restart the room
+```
+
+or from a phone: control panel → **If something looks wrong** is for repairs;
+the update lives with the restarts as **Check for a software update**.
+
+**Watch what it did**
+
+```bash
+journalctl --user -u room-update.service -n 50
+```
+
+**Turning it off**
+
+**Settings → Reliability & recovery → Update the room software when it boots**,
+or:
+
+```bash
+./scripts/roomctl set AUTO_UPDATE_ON_BOOT false
+```
+
+Set **Branch to update from** (`AUTO_UPDATE_BRANCH`) to pin a room to one
+branch; empty means "whichever branch this Pi is on".
+
+Worth being clear about the trade: with this on, whoever can push to that
+branch can change what the room runs. That is the point of it, and it is fine
+for a repository you control — but it is the reason the setting exists.
 
 ---
 

@@ -271,8 +271,9 @@ SHOW_STATUS_INDICATORS: true
 
 # ----------------------------------------------------------------------
 # Background & slideshow
-#   The wallpaper behind the dashboard. Upload your own photos from the
-#   control panel and they rotate as a slideshow.
+#   The wallpaper behind the dashboard. Upload your own photos and
+#   videos from the control panel and they rotate as a slideshow; a
+#   video plays all the way through before the next slide.
 # ----------------------------------------------------------------------
 # “theme” is the built-in gradient. “slideshow” rotates through the images
 # you upload in the control panel. “solid” is a single colour.
@@ -280,8 +281,12 @@ SHOW_STATUS_INDICATORS: true
 BACKGROUND_MODE: theme
 
 # How long each slideshow image stays on screen before it fades to the
-# next.
+# next. Videos ignore this and play to the end.
 BACKGROUND_SLIDESHOW_SECONDS: 45
+
+# Off by default, and it should usually stay off: the wallpaper talking
+# over a meeting is worse than a silent clip.
+BACKGROUND_VIDEO_SOUND: false
 
 # Off plays them in filename order.
 BACKGROUND_SHUFFLE: true
@@ -325,6 +330,16 @@ WATCHDOG_REBOOT_ENABLED: true
 # With a 1-minute watchdog, 10 means roughly ten minutes of being
 # completely unresponsive.
 WATCHDOG_REBOOT_AFTER_FAILURES: 10
+
+# Pulls the latest version from the repository this room was installed
+# from, before the dashboard starts. A room that cannot reach the
+# repository, or whose files have been edited on the Pi, simply keeps the
+# version it has — updating never stops the room starting.
+AUTO_UPDATE_ON_BOOT: true
+
+# Empty follows whichever branch the Pi is on. Only fast-forward updates
+# are taken, so a branch that has diverged is left alone.
+AUTO_UPDATE_BRANCH: ''
 
 # Optional HH:MM (24-hour) at which the room software restarts itself
 # while nobody is around, e.g. 04:30. Empty disables it.

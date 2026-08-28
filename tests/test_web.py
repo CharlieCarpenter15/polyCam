@@ -30,6 +30,12 @@ def tiny_png() -> bytes:
     )
 
 
+def tiny_mp4() -> bytes:
+    """An MP4 file header, which is all the type check looks at."""
+    body = b"ftypisom" + b"\x00\x00\x02\x00" + b"isomiso2avc1mp41"
+    return len(body).to_bytes(4, "big") + body + b"\x00" * 512
+
+
 @pytest.fixture()
 def app(mock_config):
     from app.main import create_app
@@ -283,6 +289,61 @@ class TestBackgrounds:
     )
     def test_only_our_own_images_are_served(self, client, name):
         assert client.get(f"/media/backgrounds/{name}").status_code in (301, 302, 404)
+
+    def test_a_video_can_be_uploaded_and_played_back(self, client, token):
+        response = client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_mp4()), "loop.mp4")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        assert response.status_code == 200, response.get_json()
+        uploaded = response.get_json()["image"]
+        assert uploaded["kind"] == "video"
+        assert uploaded["name"].endswith(".mp4")
+
+        served = client.get(uploaded["url"])
+        assert served.status_code == 200
+        assert served.headers["Content-Type"].startswith("video/")
+
+    def test_a_video_is_a_slide_but_never_a_css_background(self, client, token):
+        """Painting an .mp4 as a background-image would just blank the wall."""
+        client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_mp4()), "loop.mp4")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_png()), "wall.png")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        backgrounds = client.get("/api/state").get_json()["backgrounds"]
+        kinds = [item["kind"] for item in backgrounds["media"]]
+        assert sorted(kinds) == ["image", "video"]
+        assert len(backgrounds["images"]) == 1
+        assert not any(url.endswith(".mp4") for url in backgrounds["images"])
+
+    @pytest.mark.parametrize(
+        "payload,name",
+        [
+            (b"\x00\x00\x00\x18ftypheic" + b"\x00" * 64, "photo.heic"),
+            (b"\x00\x00\x00\x18ftyp" + b"\x00" * 64, "nameless.mp4"),
+            (b"RIFF\x00\x00\x00\x00AVI ", "old.avi"),
+        ],
+    )
+    def test_containers_the_tv_cannot_play_are_refused(self, client, token, payload, name):
+        """Better a clear "no" than a slide that is black for 45 seconds."""
+        response = client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(payload), name)},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        assert response.status_code == 400
+        assert "video" in response.get_json()["error"].lower()
 
     def test_uploads_can_be_switched_off(self, client, token, mock_config):
         mock_config.update({"BACKGROUND_ALLOW_UPLOADS": False})

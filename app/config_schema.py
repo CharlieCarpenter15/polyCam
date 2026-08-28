@@ -135,7 +135,8 @@ GROUP_HELP: dict[str, str] = {
     "nothing else.",
     "display": "Chromium kiosk behaviour on the TV.",
     "background": "The wallpaper behind the dashboard. Upload your own photos "
-    "from the control panel and they rotate as a slideshow.",
+    "and videos from the control panel and they rotate as a slideshow; a video "
+    "plays all the way through before the next slide.",
     "recovery": "Self-healing. Leave these alone unless you have a reason.",
     "system": "Ports, logging and administrative access.",
 }
@@ -781,7 +782,17 @@ FIELDS: tuple[Field, ...] = (
         maximum=3600,
         group="background",
         label="Seconds per image",
-        help="How long each slideshow image stays on screen before it fades to the next.",
+        help="How long each slideshow image stays on screen before it fades to "
+        "the next. Videos ignore this and play to the end.",
+    ),
+    Field(
+        key="BACKGROUND_VIDEO_SOUND",
+        type="bool",
+        default=False,
+        group="background",
+        label="Play sound with background videos",
+        help="Off by default, and it should usually stay off: the wallpaper "
+        "talking over a meeting is worse than a silent clip.",
     ),
     Field(
         key="BACKGROUND_SHUFFLE",
@@ -888,6 +899,29 @@ FIELDS: tuple[Field, ...] = (
         label="Failed checks before rebooting",
         help="With a 1-minute watchdog, 10 means roughly ten minutes of being "
         "completely unresponsive.",
+        advanced=True,
+    ),
+    Field(
+        key="AUTO_UPDATE_ON_BOOT",
+        type="bool",
+        default=True,
+        group="recovery",
+        label="Update the room software when it boots",
+        help="Pulls the latest version from the repository this room was "
+        "installed from, before the dashboard starts. A room that cannot reach "
+        "the repository, or whose files have been edited on the Pi, simply "
+        "keeps the version it has — updating never stops the room starting.",
+        restart_units=(),
+    ),
+    Field(
+        key="AUTO_UPDATE_BRANCH",
+        type="str",
+        default="",
+        group="recovery",
+        label="Branch to update from",
+        help="Empty follows whichever branch the Pi is on. Only fast-forward "
+        "updates are taken, so a branch that has diverged is left alone.",
+        placeholder="main",
         advanced=True,
     ),
     Field(

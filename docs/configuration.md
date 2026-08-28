@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 84 options. All have working defaults; a fresh install
+There are 87 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -119,7 +119,8 @@ needs only a calendar link.
 | Option | Default | What it does |
 | --- | --- | --- |
 | `BACKGROUND_MODE` | `theme` | Background. “theme” is the built-in gradient. “slideshow” rotates through the images you upload in the control panel. “solid” is a single colour. One of: theme, slideshow, solid. |
-| `BACKGROUND_SLIDESHOW_SECONDS` | `45` | Seconds per image. How long each slideshow image stays on screen before it fades to the next. (min 5, max 3600) |
+| `BACKGROUND_SLIDESHOW_SECONDS` | `45` | Seconds per image. How long each slideshow image stays on screen before it fades to the next. Videos ignore this and play to the end. (min 5, max 3600) |
+| `BACKGROUND_VIDEO_SOUND` | `false` | Play sound with background videos. Off by default, and it should usually stay off: the wallpaper talking over a meeting is worse than a silent clip. |
 | `BACKGROUND_SHUFFLE` | `true` | Shuffle images. Off plays them in filename order. |
 | `BACKGROUND_DIM_PERCENT` | `55` | Darken images by (%). Keeps the time and meeting text readable over a bright photo. Raise it if the text is hard to read from across the room. (min 0, max 95) |
 | `BACKGROUND_BLUR_PIXELS` | `0` | Blur images by (pixels). A little blur makes busy photos easier to read text over. (min 0, max 40) |
@@ -136,6 +137,8 @@ needs only a calendar link.
 | `WATCHDOG_ENABLED` | `true` | External watchdog. A tiny timer outside the app checks the appliance every minute and restarts anything that has stopped answering. Restarts: room-watchdog. |
 | `WATCHDOG_REBOOT_ENABLED` | `true` | Reboot as a last resort. If the appliance cannot be revived by restarting services, reboot the Pi. Rate-limited to once an hour. |
 | `WATCHDOG_REBOOT_AFTER_FAILURES` | `10` | Failed checks before rebooting. With a 1-minute watchdog, 10 means roughly ten minutes of being completely unresponsive. (min 3, max 120) _Advanced._ |
+| `AUTO_UPDATE_ON_BOOT` | `true` | Update the room software when it boots. Pulls the latest version from the repository this room was installed from, before the dashboard starts. A room that cannot reach the repository, or whose files have been edited on the Pi, simply keeps the version it has — updating never stops the room starting. |
+| `AUTO_UPDATE_BRANCH` | empty | Branch to update from. Empty follows whichever branch the Pi is on. Only fast-forward updates are taken, so a branch that has diverged is left alone. _Advanced._ |
 | `DAILY_RESTART_TIME` | empty | Daily quiet-hours restart. Optional HH:MM (24-hour) at which the room software restarts itself while nobody is around, e.g. 04:30. Empty disables it. |
 
 ## System & access

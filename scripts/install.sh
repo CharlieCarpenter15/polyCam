@@ -375,7 +375,8 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 
   if systemctl --user enable room-dashboard.service room-kiosk.service \
-       room-airplay.service room-remote.service room-watchdog.timer >/dev/null 2>&1; then
+       room-airplay.service room-remote.service room-watchdog.timer \
+       room-update.service >/dev/null 2>&1; then
     good "enabled all services at boot"
   else
     warn "Some services could not be enabled; check: systemctl --user status"
