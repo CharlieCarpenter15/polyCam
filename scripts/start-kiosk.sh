@@ -169,6 +169,23 @@ fi
 ENABLE_FEATURES="WebRTCPipeWireCapturer"
 DISABLE_FEATURES="Translate,TranslateUI,AutofillServerCommunication,MediaRouter"
 
+# ------------------------------------------------------- performance profile
+#
+# Every default in this file was chosen for a Raspberry Pi. On a mini-PC or a
+# NUC that leaves the GPU idle and the machine loafing, so the profile adds the
+# flags that hardware can actually use. See app/hardware_profile.py; Chromium
+# ignores flags and features it does not recognise, so an older build is safe.
+PROFILE="$(room_config _PROFILE balanced)"
+PROFILE_ARGS="$(room_config _CHROMIUM_ARGS '')"
+PROFILE_ENABLE="$(room_config _CHROMIUM_ENABLE '')"
+PROFILE_DISABLE="$(room_config _CHROMIUM_DISABLE '')"
+
+[ -n "$PROFILE_ENABLE" ] && ENABLE_FEATURES="$ENABLE_FEATURES,$PROFILE_ENABLE"
+[ -n "$PROFILE_DISABLE" ] && DISABLE_FEATURES="$DISABLE_FEATURES,$PROFILE_DISABLE"
+
+room_log "kiosk.performance_profile" "profile=$PROFILE" \
+  "machine=$(room_config _MACHINE unknown)"
+
 ARGS=(
   --kiosk
   --start-fullscreen
@@ -223,6 +240,12 @@ case "$RENDER_MODE" in
     fi
     ;;
 esac
+
+if [ -n "$PROFILE_ARGS" ]; then
+  # shellcheck disable=SC2206  # deliberate word splitting: a flag list
+  read -r -a PROFILE_ARRAY <<< "$PROFILE_ARGS"
+  ARGS+=("${PROFILE_ARRAY[@]}")
+fi
 
 ARGS+=("--enable-features=$ENABLE_FEATURES")
 ARGS+=("--disable-features=$DISABLE_FEATURES")

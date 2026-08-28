@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 88 options. All have working defaults; a fresh install
+There are 89 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -106,6 +106,7 @@ needs only a calendar link.
 | `KIOSK_ENABLED` | `true` | Run the Chromium kiosk. Turn off only when developing on a normal computer. Restarts: room-kiosk. |
 | `CHROMIUM_BINARY` | `auto` | Chromium binary. “auto” searches for chromium-browser, chromium then google-chrome. _Advanced._ Restarts: room-kiosk. |
 | `CHROMIUM_DEBUG_PORT` | `9222` | Chromium debug port (localhost only). Used by the appliance to drive the browser. Never exposed off the Pi. (min 1024, max 65535) _Advanced._ Restarts: room-kiosk. |
+| `PERFORMANCE_PROFILE` | `auto` | Performance profile. “auto” looks at the machine and picks: a mini-PC or NUC gets “high” (GPU rasterisation and video decoding on, join timings unpadded), a Pi 4 or 5 gets “balanced”, a Pi 3 gets “low”. Choose one by hand to override the guess. It only ever supplies defaults — anything you have set yourself still wins. One of: auto, high, balanced, low. Restarts: room-dashboard, room-kiosk. |
 | `CHROMIUM_RENDER_MODE` | `auto` | How Chromium draws to the TV. Fix for a blank or white screen. “auto” detects Wayland (the default on Raspberry Pi OS Bookworm). Try “wayland”, then “x11”, then “software” — software always renders but without GPU acceleration. One of: auto, wayland, x11, software. Restarts: room-kiosk. |
 | `CHROMIUM_EXTRA_ARGS` | empty | Extra Chromium arguments. _Advanced._ Restarts: room-kiosk. |
 | `HIDE_CURSOR` | `true` | Hide the mouse pointer. Restarts: room-kiosk. |

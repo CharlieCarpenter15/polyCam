@@ -33,6 +33,7 @@ from urllib.parse import urlsplit
 
 from .cdp import CDPError, ChromeDevTools
 from .config import ConfigManager
+from .config_schema import FIELDS_BY_KEY
 from .join_flows import (
     build_click_script,
     build_in_call_script,
@@ -398,7 +399,8 @@ class BrowserService:
     ) -> None:
         """Press the join buttons, giving up quietly after the deadline."""
         flow = flow_for(meeting.provider_id)
-        deadline = time.monotonic() + self.config.int_("AUTO_JOIN_TIMEOUT_SECONDS")
+        tuning = self.config.performance()
+        deadline = time.monotonic() + self._join_timeout(tuning)
         texts = ordered_button_texts(
             meeting.provider_id, self.config.list_("JOIN_BUTTON_TEXTS")
         )
@@ -412,7 +414,9 @@ class BrowserService:
         # Let the page load before poking at it. Clicking into a half-drawn
         # page is worse than waiting: the buttons are not there yet, and on
         # slow hardware the whole attempt can expire before the page is ready.
-        settle = self.config.float_("JOIN_SETTLE_SECONDS") or flow.settle_seconds
+        settle = self.config.float_("JOIN_SETTLE_SECONDS") or (
+            flow.settle_seconds * tuning.settle_multiplier
+        )
         log_event(
             log, logging.DEBUG, "meeting.join_waiting_for_page",
             provider=meeting.provider_id, seconds=settle,
@@ -537,6 +541,19 @@ class BrowserService:
             error=attempt.error or "no join button matched",
             note="the room can still join with the JOIN button",
         )
+
+    def _join_timeout(self, tuning) -> int:
+        """How long to keep trying, in seconds.
+
+        The configured value wins whenever it has been changed; at its shipped
+        default the machine decides, because a NUC that has not joined in a
+        minute is stuck, while a Pi 3 may simply still be drawing.
+        """
+        configured = self.config.int_("AUTO_JOIN_TIMEOUT_SECONDS")
+        default = FIELDS_BY_KEY["AUTO_JOIN_TIMEOUT_SECONDS"].default
+        if configured != default:
+            return configured
+        return tuning.join_timeout_seconds
 
     def retry_join(self) -> bool:
         """Run the join automation again for the meeting already on screen.

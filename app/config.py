@@ -637,6 +637,21 @@ class ConfigManager:
     def join_display_name(self) -> str:
         return self.str_("JOIN_DISPLAY_NAME") or self.str_("ROOM_NAME") or "Meeting Room"
 
+    def performance(self):
+        """The :class:`~app.hardware_profile.Tuning` this machine should run at.
+
+        Imported lazily: the hardware is read from ``/proc`` and ``/sys``, and
+        nothing that merely loads the configuration should have to touch them.
+        """
+        from .hardware_profile import tuning_for
+
+        return tuning_for(self.str_("PERFORMANCE_PROFILE"))
+
+    def performance_report(self) -> dict:
+        from .hardware_profile import report
+
+        return report(self.str_("PERFORMANCE_PROFILE"))
+
     def tz(self):
         """The room's :class:`~zoneinfo.ZoneInfo`, or the system zone."""
         name = self.str_("TIMEZONE")

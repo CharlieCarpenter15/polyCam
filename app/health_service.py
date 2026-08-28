@@ -275,6 +275,9 @@ class HealthService:
                 "setup_required": self.config.setup_required(),
                 "config_warnings": list(self.config.warnings),
             },
+            # What the room decided this machine is, and how hard it is being
+            # pushed. First question worth asking when a room feels sluggish.
+            "performance": self.config.performance_report(),
             "calendar": calendar,
             "browser": browser,
             "airplay": airplay,

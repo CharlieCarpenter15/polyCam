@@ -78,9 +78,35 @@ The two halves of this appliance have very different appetites:
 
 | | Dashboard, calendar, AirPlay, one-touch join | Being the video endpoint in a call |
 | --- | --- | --- |
+| **Mini-PC / NUC (x86, 4+ cores, 8 GB)** | Trivial | Comfortable |
 | **Pi 5 (4/8 GB)** | Comfortable | Works |
 | **Pi 4 (4/8 GB)** | Comfortable | Usable, runs warm |
 | **Pi 3 (1 GB)** | Fine | **Not realistically** |
+
+**It is not only for a Pi, and it tunes itself.** At startup the room measures
+the machine — cores, memory, whether it is a Raspberry Pi at all — and picks a
+profile. On a mini-PC or a NUC that means **high**: Chromium is told to use the
+GPU properly (rasterisation, hardware video decode, no background throttling of
+a window that is in a call), and the join automation stops padding its timings
+for hardware that does not need the padding.
+
+| Profile | Picked for | What changes |
+| --- | --- | --- |
+| `high` | Not a Pi, 4+ cores, 8 GB+ | GPU rasterisation, zero-copy, hardware video decode, no renderer backgrounding; join settles in ~3 s instead of 8, gives up after 60 s; dashboard polls every 3.5 s |
+| `balanced` | Pi 4, Pi 5, a modest PC | The shipped defaults, unchanged |
+| `low` | Pi 3, or under 2 GB | Fewer renderer processes, no smooth scrolling; join waits four times as long and keeps trying for five minutes |
+
+```bash
+./scripts/roomctl performance              # what it decided, and why
+./scripts/roomctl performance high         # override the guess
+./scripts/roomctl performance auto         # back to measuring
+```
+
+A profile only ever supplies **defaults**. Anything you have set yourself —
+`JOIN_SETTLE_SECONDS`, `AUTO_JOIN_TIMEOUT_SECONDS` — still wins, so the room
+never quietly argues with a value you typed. `roomctl status` and
+`GET /api/health` both report the machine it found and the profile it is
+running.
 
 A Pi 3 has 1 GB of RAM and no hardware video encode. Chromium plus a live
 Google Meet or Teams call needs more memory than that, and the outgoing camera
@@ -1319,6 +1345,8 @@ A test fails if you forget.
 ```bash
 ./scripts/roomctl status              how is the room?
 ./scripts/roomctl screen              why is the TV blank / white / wrong?
+./scripts/roomctl performance         what machine is this, and how hard is it pushed?
+./scripts/roomctl performance high    override the guess (auto|high|balanced|low)
 ./scripts/roomctl slow-device on      retune for a Pi 3 / older hardware
 ./scripts/roomctl port                show the dashboard port
 ./scripts/roomctl port auto           move to a free port (or: port 9123)

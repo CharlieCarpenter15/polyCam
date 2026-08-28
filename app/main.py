@@ -345,6 +345,9 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         payload["display"] = {
             "show_instructions": config.bool_("SHOW_SHARING_INSTRUCTIONS"),
             "show_status": config.bool_("SHOW_STATUS_INDICATORS"),
+            # How often to come back. A capable machine can afford to ask more
+            # often; a Pi 3 has better things to do.
+            "poll_ms": config.performance().poll_ms,
             "theme": config.str_("THEME"),
             "accent": config.str_("ACCENT_COLOR"),
             "show_panel_url": config.bool_("PANEL_SHOW_URL_ON_TV"),

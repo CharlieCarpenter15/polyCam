@@ -948,7 +948,10 @@
     fetchJson("/api/state")
       .then(function (payload) {
         consecutiveFailures = 0;
-        pollDelay = POLL_MS;
+        // The backend knows what kind of machine this is and how often it can
+        // afford to be asked. Anything silly is ignored.
+        var wanted = payload && payload.display && Number(payload.display.poll_ms);
+        pollDelay = (wanted >= 1000 && wanted <= POLL_MS_MAX) ? wanted : POLL_MS;
         if (payload && payload.now) {
           var serverTime = new Date(payload.now).getTime();
           if (!isNaN(serverTime)) {

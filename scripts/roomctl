@@ -8,6 +8,8 @@
 #
 #   roomctl status                     how is the room?
 #   roomctl screen                     why is the TV blank / white / wrong?
+#   roomctl performance [auto|high|balanced|low]
+#                                      how hard to push this machine
 #   roomctl slow-device on|off         retune for a Pi 3 / older hardware
 #   roomctl port [N|auto]              show / set / auto-pick the dashboard port
 #   roomctl doctor                     run every hardware check
@@ -102,6 +104,11 @@ for name, status in (data.get("components") or {}).items():
 
 backend = data.get("backend") or {}
 host = data.get("host") or {}
+performance = data.get("performance") or {}
+if performance:
+    machine = (performance.get("machine") or {}).get("description", "")
+    chosen = "auto" if performance.get("automatic") else "set by hand"
+    print(f"\n  {machine}\n  running the '{performance.get('profile')}' profile ({chosen})")
 print(f"\n  version {backend.get('version')}  "
       f"backend up {round(backend.get('uptime_seconds', 0) / 60)} min  "
       f"pi up {round(host.get('uptime_seconds', 0) / 3600)} h")
@@ -654,6 +661,40 @@ PYEOF
   esac
 }
 
+cmd_performance() {
+  room_load_config || true
+  local configured wanted
+  configured="$(room_config PERFORMANCE_PROFILE auto)"
+
+  wanted="${1:-}"
+  if [ -z "$wanted" ]; then
+    bold "Performance"
+    printf '  %-10s %s\n' "machine" "$(room_config _MACHINE 'unknown hardware')"
+    printf '  %-10s %s\n' "running" "$(room_config _PROFILE balanced)"
+    if [ "$configured" = "auto" ]; then
+      dim "  Chosen automatically. Override:  roomctl performance high|balanced|low"
+    else
+      dim "  Set by hand to '$configured'. Back to automatic:  roomctl performance auto"
+    fi
+    return 0
+  fi
+
+  case "$wanted" in
+    auto | high | balanced | low) ;;
+    *)
+      red "Usage: roomctl performance [auto|high|balanced|low]"
+      exit 1
+      ;;
+  esac
+
+  cmd_set PERFORMANCE_PROFILE "$wanted"
+  cmd_units restart backend
+  cmd_units restart browser
+  printf '\n'
+  room_load_config || true
+  cmd_performance
+}
+
 cmd_slow_device() {
   # A Pi 3 is roughly five times slower than a Pi 5 and has a quarter of the
   # memory. The defaults assume a Pi 5, so on older hardware the appliance
@@ -663,6 +704,7 @@ cmd_slow_device() {
   case "${1:-}" in
     on)
       bold "Retuning for slower hardware"
+      cmd_set PERFORMANCE_PROFILE low          # stop guessing; assume the worst
       cmd_set AUTO_OPEN_MINUTES 4              # open the page well before the start
       cmd_set JOIN_SETTLE_SECONDS 30           # let it finish drawing first
       cmd_set AUTO_JOIN_TIMEOUT_SECONDS 300    # keep trying for five minutes
@@ -678,6 +720,7 @@ cmd_slow_device() {
       ;;
     off)
       bold "Restoring the standard timings"
+      cmd_set PERFORMANCE_PROFILE auto         # let the machine speak for itself
       cmd_set AUTO_OPEN_MINUTES 1
       cmd_set JOIN_SETTLE_SECONDS 0
       cmd_set AUTO_JOIN_TIMEOUT_SECONDS 90
@@ -749,6 +792,7 @@ case "$COMMAND" in
   qr | code)         cmd_qr "$@" ;;
   port)              cmd_port "$@" ;;
   doctor | check)    cmd_doctor ;;
+  performance | perf) cmd_performance "$@" ;;
   slow-device | slow) cmd_slow_device "$@" ;;
   restart)           cmd_units restart "$@" ;;
   start)             cmd_units start "$@" ;;

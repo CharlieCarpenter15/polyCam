@@ -705,6 +705,20 @@ FIELDS: tuple[Field, ...] = (
         restart_units=("room-kiosk.service",),
     ),
     Field(
+        key="PERFORMANCE_PROFILE",
+        type="choice",
+        default="auto",
+        choices=("auto", "high", "balanced", "low"),
+        group="display",
+        label="Performance profile",
+        help="“auto” looks at the machine and picks: a mini-PC or NUC gets "
+        "“high” (GPU rasterisation and video decoding on, join timings "
+        "unpadded), a Pi 4 or 5 gets “balanced”, a Pi 3 gets “low”. Choose one "
+        "by hand to override the guess. It only ever supplies defaults — "
+        "anything you have set yourself still wins.",
+        restart_units=("room-dashboard.service", "room-kiosk.service"),
+    ),
+    Field(
         key="CHROMIUM_RENDER_MODE",
         type="choice",
         default="auto",

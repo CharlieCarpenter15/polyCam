@@ -63,6 +63,22 @@ sys.path.insert(0, ".")
 try:
     from app.config import get_config
     config = get_config()
+
+    # Synthetic keys, so a shell script can ask what kind of machine this is
+    # without a second Python start-up. They cannot collide with real settings:
+    # every schema key is an uppercase word, none begins with an underscore.
+    try:
+        from app.hardware_profile import TUNINGS, report as _report
+        _perf = _report(config.str_("PERFORMANCE_PROFILE"))
+        _tuning = TUNINGS[_perf["profile"]]
+        print(f"_PROFILE={_perf['profile']}")
+        print(f"_MACHINE={_perf['machine']['description']}")
+        print("_CHROMIUM_ARGS=" + " ".join(_tuning.chromium_args))
+        print("_CHROMIUM_ENABLE=" + ",".join(_tuning.enable_features))
+        print("_CHROMIUM_DISABLE=" + ",".join(_tuning.disable_features))
+    except Exception:  # noqa: BLE001 - the room starts without a profile
+        print("_PROFILE=balanced")
+
     for key, value in sorted(config.as_dict().items()):
         if isinstance(value, bool):
             rendered = "true" if value else "false"
