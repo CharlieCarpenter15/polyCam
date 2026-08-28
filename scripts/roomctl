@@ -820,10 +820,6 @@ minutes_note() {
   if [ -n "$MINUTES_BARE" ]; then dim "  $*" >&2; else dim "  $*"; fi
 }
 
-minutes_problem() {
-  if [ -n "$MINUTES_BARE" ]; then red "  $*" >&2; else red "  $*"; fi
-}
-
 # A blank line that follows its notes, so that --transcript stays pipeable.
 minutes_gap() {
   if [ -n "$MINUTES_BARE" ]; then printf '\n' >&2; else printf '\n'; fi
@@ -872,7 +868,8 @@ minutes_sign_in() {
 minutes_send() {
   local method="$1" path="$2"
   if ! minutes_sign_in; then
-    printf '%s\n' '{"ok": false, "error": "The room software would not issue a page token. Restart it: roomctl restart backend"}'
+    printf '{"ok": false, "error": "%s"}\n' \
+      "The room software would not issue a page token. Try: roomctl restart backend"
     return 0
   fi
   curl --silent --max-time 120 --request "$method" \
@@ -940,6 +937,7 @@ when the room software is not running.
 import json
 import os
 import re
+import shutil
 import sys
 import textwrap
 from datetime import datetime
@@ -1489,11 +1487,10 @@ def main(argv):
         return
 
     if what == "remove":
-        where = os.path.join(source, "sessions", args[0] if args else "")
-        if not SESSION_ID.match(args[0] if args else "") or not os.path.isdir(where):
+        session_id = args[0] if args else ""
+        where = os.path.join(source, "sessions", session_id)
+        if not SESSION_ID.match(session_id) or not os.path.isdir(where):
             stop("Nothing on this appliance is recorded under that id.")
-        import shutil
-
         try:
             shutil.rmtree(where)
         except OSError as exc:

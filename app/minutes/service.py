@@ -878,6 +878,12 @@ class MinutesService:
                     "session_id": recording.meta.session_id,
                     "title": recording.meta.title,
                     "seconds": round(recording.seconds),
+                    # Anything the recorder has had to work around so far — the
+                    # speaker changing device, a dropped connection it
+                    # reconnected. Shown while the meeting is still running,
+                    # because finding out afterwards that the far end was
+                    # silent for twenty minutes is finding out too late.
+                    "notices": list(getattr(recording.recorder, "notices", []) or []),
                 }
                 if recording
                 else None

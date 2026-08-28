@@ -244,6 +244,51 @@ class TestTheRecordingLifecycle:
         service.config.update({"MINUTES_SHOW_RECORDING_NOTICE": False})
         assert service.dashboard_payload()["notice"] == ""
 
+    def test_screen_sharing_does_not_fragment_a_recording(self, service):
+        """Somebody mirroring a laptop mid-meeting must not split the meeting.
+
+        The room switches to its screen-sharing mode when that happens, but the
+        meeting stays open underneath. The recorder keys off the meeting rather
+        than the mode for exactly this reason, and this test is what stops
+        somebody "simplifying" it to the mode later.
+        """
+        service.room.active = FakeActive()
+        service.tick()
+        first = service.status()["recording"]["session_id"]
+
+        # The room is now mirroring a laptop. The meeting is still on.
+        service.room.mode = "screen-sharing"
+        service.tick()
+
+        still = service.status()["recording"]
+        assert still is not None, "the recording stopped when somebody shared a screen"
+        assert still["session_id"] == first, "the meeting was split into two"
+
+    def test_a_meeting_nobody_left_stops_at_the_limit(self, service):
+        service.config.update({"MINUTES_MAX_MEETING_MINUTES": 5})
+        service.room.active = FakeActive()
+        service.tick()
+        recording = service._recording
+        assert recording is not None
+
+        # Pretend it has been running for six hours.
+        recording.started = recording.started - timedelta(hours=6)
+        service.tick()
+
+        assert service.status()["recording"] is None, "it recorded past the limit"
+        assert service.list_sessions(), "and threw the recording away"
+
+    def test_the_limit_starts_a_fresh_recording_for_the_same_meeting(self, service):
+        """A meeting longer than the limit is chopped, not abandoned."""
+        service.config.update({"MINUTES_MAX_MEETING_MINUTES": 5})
+        service.room.active = FakeActive()
+        service.tick()
+        service._recording.started = service._recording.started - timedelta(hours=6)
+        service.tick()
+        service.tick()
+
+        assert service.status()["recording"] is not None, "it stopped recording the meeting"
+
     def test_stopping_finishes_the_recording_in_progress(self, service):
         service.room.active = FakeActive()
         service.tick()

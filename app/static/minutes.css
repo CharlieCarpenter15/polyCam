@@ -101,6 +101,10 @@
 .mn-badge-off  { background: var(--surface-3); color: var(--text-faint); }
 .mn-badge-warn { background: rgba(255, 176, 32, 0.16); color: var(--warn); }
 
+/* A recorder that has had to work around something, while the meeting is still
+   running and somebody could still act on it. */
+.mn-note-warn { color: var(--warn); }
+
 /* ------------------------------------------------------------------ people */
 
 .mn-add { margin: 4px 0 18px; }

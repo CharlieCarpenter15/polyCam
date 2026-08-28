@@ -102,7 +102,13 @@
     show($("idle-note"), !busy);
     if (recording) {
       $("recording-title").textContent = recording.title || "Meeting";
-      $("recording-sub").textContent = "Session " + (recording.session_id || "");
+      // Anything the recorder has had to work around, while there is still
+      // time to do something about it. Finding out after the meeting that the
+      // far end was silent for twenty minutes is finding out too late.
+      var trouble = (recording.notices || []).join(" ");
+      $("recording-sub").textContent = trouble ||
+        ("Session " + (recording.session_id || ""));
+      $("recording-sub").className = trouble ? "block-note mn-note-warn" : "block-note";
       recordingBase = { seconds: Number(recording.seconds) || 0, at: Date.now() };
       tickClock();
     } else {
