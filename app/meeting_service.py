@@ -7,6 +7,8 @@ service turns them into a decision and the actions that follow from it.
 Precedence, highest first:
 
 1. ``screen-sharing`` — someone is mirroring, so their screen is on the TV
+   (from a Mac over AirPlay, or from a PC over the room's network — the room
+   behaves the same either way)
 2. ``meeting``        — the TV is on a meeting page
 3. ``offline``        — no network; the dashboard stays up and says so
 4. ``home``           — the room dashboard
@@ -35,6 +37,7 @@ from datetime import date, datetime, timedelta, timezone
 from .airplay_service import AirPlayService
 from .browser_service import BrowserService
 from .calendar_service import CalendarService
+from .cast_service import CastService
 from .config import ConfigManager
 from .logging_setup import get_logger, log_event
 from .models import (
@@ -121,6 +124,7 @@ class MeetingService:
         calendar: CalendarService,
         browser: BrowserService,
         airplay: AirPlayService,
+        cast: CastService,
         poly: PolyService,
         system: SystemService,
     ) -> None:
@@ -128,6 +132,7 @@ class MeetingService:
         self.calendar = calendar
         self.browser = browser
         self.airplay = airplay
+        self.cast = cast
         self.poly = poly
         self.system = system
 
@@ -148,6 +153,7 @@ class MeetingService:
         self._starting_up = True
 
         airplay.on_change(self._on_sharing_change)
+        cast.on_change(self._on_sharing_change)
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
@@ -178,17 +184,48 @@ class MeetingService:
         with self._lock:
             self._network_ok = ok
 
+    @property
+    def sharing(self) -> bool:
+        """True while anybody's screen is on the TV, by either route."""
+        return self.airplay.sharing or self.cast.sharing
+
+    def sharing_refusal(self) -> str:
+        """Why the room's *current state* forbids a new share, or "".
+
+        Asked before a browser share is allowed to start, so the person gets a
+        straight answer on their laptop instead of a screen that never appears.
+        Whether the feature is switched on at all is the cast service's
+        question, not this one's.
+
+        A meeting always wins over a browser share, whatever the room's AirPlay
+        policy says, and the reason is mechanical: AirPlay draws its own window
+        over whatever the TV is showing, but a browser share is played *by* the
+        dashboard page — which is behind the meeting and cannot come forward
+        without dropping the call. Since sharing inside the meeting is the
+        better answer anyway (remote people see it too), say so.
+        """
+        with self._lock:
+            active = self._state.active
+        if active is not None:
+            return (
+                "The TV is in a meeting. Share your screen inside the meeting "
+                "instead — that way the people who are not in the room can see "
+                "it too."
+            )
+        return ""
+
     def _on_sharing_change(self, sharing: bool) -> None:
-        """React immediately when mirroring starts or stops."""
+        """React immediately when sharing starts or stops, by either route."""
         if sharing:
             with self._lock:
                 in_meeting = self._state.active is not None
             if in_meeting and not self.config.bool_("AIRPLAY_INTERRUPTS_MEETING"):
                 log_event(log, logging.WARNING, "airplay.refused_during_meeting")
                 self.airplay.force_stop_sharing()
+                self.cast.end_current(reason="this room does not allow sharing during a meeting")
                 return
         else:
-            # Mirroring stopped: make sure the dashboard (or meeting) is visible.
+            # Sharing stopped: make sure the dashboard (or meeting) is visible.
             self.browser.bring_to_front()
         self.tick()
 
@@ -236,7 +273,7 @@ class MeetingService:
         self._maybe_daily_restart(now)
 
         # 4. Work out the mode.
-        sharing = self.airplay.sharing
+        sharing = self.sharing
         if sharing:
             mode = MODE_SHARING
         elif active is not None:
@@ -317,7 +354,7 @@ class MeetingService:
         with self._lock:
             if self._state.active is not None:
                 return  # never interrupt a meeting
-        if self.airplay.sharing:
+        if self.sharing:
             return
         self._last_daily_restart = now.date()
         log_event(log, logging.WARNING, "room.daily_restart", at=target)
@@ -372,12 +409,13 @@ class MeetingService:
         if not meeting.has_link:
             return False
 
-        # Clear a mirroring session so the meeting is actually visible. This
+        # Clear any sharing session so the meeting is actually visible. This
         # happens before the lock on purpose: stopping the mirror fires the
-        # AirPlay callback, which ticks the room, which can come straight back
+        # sharing callback, which ticks the room, which can come straight back
         # in here — and the lock below is not reentrant.
         if self.airplay.sharing:
             self.airplay.force_stop_sharing()
+        self.cast.end_current(reason="a meeting is starting in this room")
 
         with self._open_lock:
             if self._already_open(meeting):
@@ -613,6 +651,7 @@ class MeetingService:
             },
             "remote": self.recent_remote_action(now),
             "airplay": self.airplay.status(),
+            "cast": self.cast.status(),
             "network_ok": network_ok,
             "setup_required": self.config.setup_required(),
             "join_available": bool(

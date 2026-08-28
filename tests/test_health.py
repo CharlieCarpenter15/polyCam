@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.airplay_service import AirPlayService
 from app.calendar_service import CalendarService
+from app.cast_service import CastService
 from app.health_service import HealthService
 from app.meeting_service import MeetingService
 from app.models import FAIL, OFF, OK, UNKNOWN, WARN
@@ -64,8 +65,9 @@ def build(config, browser=None):
     airplay = AirPlayService(config, system)
     poly = PolyService(config)
     browser = browser or FakeBrowser()
-    room = MeetingService(config, calendar, browser, airplay, poly, system)
-    health = HealthService(config, calendar, browser, airplay, poly, room, system)
+    cast = CastService(config)
+    room = MeetingService(config, calendar, browser, airplay, cast, poly, system)
+    health = HealthService(config, calendar, browser, airplay, cast, poly, room, system)
     return health, browser, room, calendar
 
 
@@ -74,7 +76,7 @@ class TestReporting:
         health, _, _, _ = build(mock_config)
         report = health.report(network_ok=True)
         assert set(report["components"]) == {
-            "backend", "calendar", "browser", "airplay",
+            "backend", "calendar", "browser", "airplay", "cast",
             "camera", "microphone", "speaker", "network",
         }
 

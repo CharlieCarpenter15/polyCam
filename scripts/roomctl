@@ -13,7 +13,7 @@
 #   roomctl slow-device on|off         retune for a Pi 3 / older hardware
 #   roomctl port [N|auto]              show / set / auto-pick the dashboard port
 #   roomctl doctor                     run every hardware check
-#   roomctl restart [what]             browser | airplay | remote | backend | all
+#   roomctl restart [what]             browser | airplay | cast | remote | backend | all
 #   roomctl start|stop [what]
 #   roomctl logs [unit] [-f]           recent logs, optionally follow
 #   roomctl config                     show every setting
@@ -62,6 +62,32 @@ resolve_unit() {
     watchdog)                                  printf 'room-watchdog.timer' ;;
     *) return 1 ;;
   esac
+}
+
+restart_cast_via_api() {
+  local port token code
+  port="$(room_config DASHBOARD_PORT 8080)"
+  token="$(room_internal_token || true)"
+
+  if [ -z "$token" ] || ! command -v curl >/dev/null 2>&1; then
+    red "failed"
+    dim "Needs curl and the room's internal token (var/internal-token)."
+    return 1
+  fi
+
+  code="$(curl -s --max-time 6 -o /dev/null -w '%{http_code}' \
+    --header 'Content-Type: application/json' \
+    --header "X-Room-Internal-Token: $token" \
+    --data '{}' \
+    "http://127.0.0.1:${port}/api/internal/restart-cast" 2>/dev/null || true)"
+
+  case "$code" in
+    200) return 0 ;;
+    000) red "failed"; dim "The room software is not answering.  roomctl status" ;;
+    409) red "failed"; dim "It would not start. Check the logs:  roomctl logs backend" ;;
+    *)   red "failed"; dim "The room software answered $code." ;;
+  esac
+  return 1
 }
 
 # ------------------------------------------------------------------ commands
@@ -381,10 +407,25 @@ cmd_units() {
     return 0
   fi
 
+  if [ "$what" = "cast" ] || [ "$what" = "pc" ]; then
+    # Screen sharing from a PC has no unit of its own: its listeners live in
+    # the backend, so this asks the backend to restart them. Bouncing the
+    # backend itself would also work, and would take the calendar and the
+    # dashboard down with it.
+    #
+    # Called directly rather than through room_post_internal, which is
+    # deliberately best-effort and reports success either way — fine for a
+    # supervisor posting an event, wrong for a command whose only output is
+    # whether it worked.
+    printf '  %s screen sharing from a PC… ' "$action"
+    restart_cast_via_api && green "ok"
+    return 0
+  fi
+
   unit="$(resolve_unit "$what" || true)"
   if [ -z "$unit" ]; then
     red "Unknown target '$what'."
-    dim "Use: browser | airplay | remote | backend | watchdog | all"
+    dim "Use: browser | airplay | cast | remote | backend | watchdog | all"
     exit 1
   fi
   printf '  %s %s… ' "$action" "$unit"

@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 89 options. All have working defaults; a fresh install
+There are 94 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -61,6 +61,16 @@ needs only a calendar link.
 | `AIRPLAY_PIN` | empty | AirPlay PIN. Optional numeric PIN a guest must type to share their screen. Empty means anyone on the network can share. **Secret — never logged.** Restarts: room-airplay. |
 | `AIRPLAY_EXTRA_ARGS` | empty | Extra UxPlay arguments. Appended to the uxplay command line for unusual setups. _Advanced._ Restarts: room-airplay. |
 | `AIRPLAY_INTERRUPTS_MEETING` | `true` | Allow screen sharing during a meeting. On: mirroring covers the meeting on the TV (the call keeps running). Off: mirroring is refused during a meeting. Either way, sharing through Teams or Meet is better, because remote participants can see it too. _Advanced._ |
+
+## Screen sharing from a PC
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `CAST_ENABLED` | `true` | Enable screen sharing from a PC. Lets a Windows, Linux or Chromebook laptop share its screen by opening the address the TV shows. This opens a second port on the room's network, carrying the sharing page and nothing else. |
+| `CAST_PORT` | `8000` | Sharing address port. The port in the address shown on the TV. Kept separate from the dashboard port on purpose: this one is always open to the room's network and carries only the sharing page, so opening it never exposes the settings or the room controller. (min 1024, max 65535) _Advanced._ |
+| `CAST_SECURE_PORT` | `8443` | Secure sharing port. Where the page that actually captures the screen is served. Browsers only allow screen capture over an encrypted connection, so the room generates its own certificate — which is why a browser warns about it once per laptop. (min 1024, max 65535) _Advanced._ |
+| `CAST_PIN` | empty | Sharing code. Optional code a laptop must type before it can share. Empty means anyone who can reach the room's network can share, which matches how AirPlay behaves by default. **Secret — never logged.** |
+| `CAST_SHOW_ON_TV` | `true` | Show the sharing address on the TV. Off, sharing still works for anyone who knows the address, but the TV stops advertising it. |
 
 ## Poly conference bar
 

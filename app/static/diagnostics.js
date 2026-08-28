@@ -25,9 +25,19 @@
 
   var COMPONENT_LABELS = {
     backend: "Room software", calendar: "Calendar", browser: "TV display (Chromium)",
-    airplay: "AirPlay receiver", camera: "Camera", microphone: "Microphone",
+    airplay: "AirPlay receiver", cast: "Sharing from a PC",
+    camera: "Camera", microphone: "Microphone",
     speaker: "Speaker", network: "Network"
   };
+
+  // The one thing worth reading here is why it is not working, if it is not.
+  function castDetail(cast) {
+    if (cast.enabled === false) return "";
+    if (cast.secure === false) return "no certificate — browsers will refuse to share";
+    if (cast.sharing) return "sharing from " + (cast.client || "a PC");
+    if (cast.last_error) return cast.last_error;
+    return "ready";
+  }
 
   function loadHealth() {
     return R.get("/api/health").then(function (health) {
@@ -36,6 +46,7 @@
         calendar: (health.calendar && (health.calendar.error || health.calendar.description)) || "",
         browser: (health.browser && health.browser.current_url) || "",
         airplay: (health.airplay && health.airplay.name) ? ("advertising “" + health.airplay.name + "”") : "",
+        cast: castDetail(health.cast || {}),
         camera: ((health.poly || {}).camera || {}).path || "",
         microphone: ((health.poly || {}).microphone || {}).description || "",
         speaker: ((health.poly || {}).speaker || {}).description || "",

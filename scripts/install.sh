@@ -134,6 +134,9 @@ APT_PACKAGES=(
   chromium-browser
   # Networking / discovery for AirPlay
   avahi-daemon avahi-utils
+  # Generates the room's own certificate, which browsers require before they
+  # will let a PC share its screen
+  openssl
   # Handy in a kiosk
   unclutter curl jq
 )

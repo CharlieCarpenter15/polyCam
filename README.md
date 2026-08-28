@@ -48,7 +48,7 @@ network. No keyboard, no YAML, no SSH.
 - [Poly conference bar](#poly-conference-bar)
 - [Poly remote / controller](#poly-remote--controller)
 - [AirPlay screen sharing](#airplay-screen-sharing)
-- [Screen sharing from Windows](#screen-sharing-from-windows)
+- [Screen sharing from a Windows PC](#screen-sharing-from-a-windows-pc)
 - [Troubleshooting](#troubleshooting)
 - [What is deliberately best-effort](#what-is-deliberately-best-effort)
 - [Architecture](#architecture)
@@ -325,7 +325,10 @@ the room's buttons open on the phone — join, leave, mute, camera, volume. See
 [The room controller](#the-room-controller-scan-the-code).
 
 **Sharing a screen.** Mac or iPhone → Control Centre → Screen Mirroring →
-*Meeting Room*. The dashboard steps aside; when mirroring stops it comes back.
+*Meeting Room*. From a Windows, Linux or Chromebook laptop, open the address the
+TV shows and press one button — see
+[Screen sharing from a Windows PC](#screen-sharing-from-a-windows-pc). Either way
+the dashboard steps aside, and comes back when sharing stops.
 
 **Nothing scheduled.** The dashboard shows the time, the date, *Available*, and
 how to share a screen.
@@ -646,31 +649,125 @@ needs to feel responsive more than it needs perfectly paced frames.
 
 ---
 
-## Screen sharing from Windows
+## Screen sharing from a Windows PC
 
-**AirPlay only supports Apple devices.** Miracast on Raspberry Pi is
-experimental and unreliable, and this appliance deliberately does not attempt
-it — a flaky Miracast stack is not worth risking the dashboard, the calendar and
-AirPlay for.
+Nothing to install, no dongle, no cable. The TV shows an address; the laptop
+opens it and presses one button.
 
-Windows users have two good options:
+```
+        ┌──────────────────────────────────────────┐
+        │  ⧉ Screen Mirroring → Meeting Room       │   ← Mac / iPhone / iPad
+        │  ▭ From a PC → 192.168.1.42:8000         │   ← Windows / Linux / Chromebook
+        └──────────────────────────────────────────┘
+```
 
-1. **Share through the meeting** — Teams or Meet content sharing. Better anyway:
-   remote participants see the content too, which mirroring to the TV never
-   achieves.
-2. **A dedicated casting dongle** on a second HDMI input, if in-room wireless
-   sharing from Windows is a hard requirement.
+**On the laptop**
 
-The architecture leaves room for a Windows method later: screen sharing is a
-separate service that reports its state to the backend over a small internal
-API, so another receiver can be added the same way UxPlay was, without touching
-the dashboard or the calendar.
+1. Type the address from the TV into Chrome, Edge or Firefox.
+2. The browser warns about the room's certificate — expected, see below. Choose
+   **Advanced → Continue** (Firefox: **Advanced → Accept the risk**).
+3. Press **Share this screen** and pick a screen or a window.
+
+It appears on the TV in about a second, with a small preview on the laptop so
+nobody has to turn round to check they are showing the right window. Press
+**Stop sharing** — on the page, or in the bar the browser puts at the bottom of
+the screen — and the dashboard comes back.
+
+Steps 1 and 2 are once per laptop: the browser remembers the certificate, and
+the address can be bookmarked straight to the sharing page.
+
+### Why the browser warns you
+
+Browsers only let a page capture the screen over an encrypted connection, and no
+certificate authority will issue a certificate for a private address like
+`192.168.1.42`. So the room signs its own, and the browser correctly points out
+that it has never heard of the issuer.
+
+The appliance makes that one click as small as it can be. The certificate names
+the room's own addresses and its `.local` hostname, so the warning is only ever
+the familiar "unknown authority" one and never a name mismatch as well. It is
+regenerated if the Pi's address changes and renewed before it expires, so the
+warning never quietly turns into a different warning.
+
+### How it works
+
+The laptop's browser sends the video **straight to the Chromium on the TV** over
+WebRTC. The Pi is only the introduction service: the laptop leaves an offer, the
+TV leaves an answer, and after that the two talk to each other directly.
+
+That is what makes this affordable on a Raspberry Pi. No media passes through
+Python — the Pi decodes the stream with the same hardware path it uses for a
+video call, and there is nothing to re-encode. It needs no internet either: no
+STUN, no TURN, no cloud service. A room with its uplink unplugged can still
+share a screen.
+
+The receiving half runs **inside the dashboard page** already open on the TV, so
+an incoming screen needs no navigation and no second browser window. If that
+page reloads mid-share — a drift correction, a health restart, someone
+power-cycling the TV — the new page asks the laptop to send again and the picture
+comes back by itself. Nobody has to walk over and press Share twice.
+
+### Settings
+
+| Setting | Effect |
+| --- | --- |
+| Enable screen sharing from a PC | On by default |
+| Sharing code | Optional code a laptop must type first. Empty means anyone on the room's network can share, which is how AirPlay behaves too |
+| Show the sharing address on the TV | Off, sharing still works for anyone with the address |
+| Sharing address port | `8000` — the port in the address on the TV |
+| Secure sharing port | `8443` — where the page that captures the screen is served |
+
+### The two ports, and why they are not the dashboard's
+
+Sharing has to be reachable by anyone who walks into the room, so its listeners
+are always open to the room's network. The dashboard's port is not: it opens only
+when an administrator asks, and once open the QR code on the TV can pair a phone
+as the room's administrator. Putting sharing on that port would mean that turning
+on screen sharing quietly opened up the room's administration.
+
+So sharing runs as two small applications of its own (`app/cast_web.py`), and
+between them they serve the sharing page, five signalling endpoints and nothing
+else. No settings, no restarts, no logs, no calendar, no controller pairing.
+
+`8000` is plain HTTP and serves one page: the explanation of the warning that is
+about to appear. It is plain HTTP so that `192.168.1.42:8000` typed with no
+`https://` in front — which is what people type — reaches something rather than
+failing on a TLS handshake. `8443` is where the capture actually happens.
+
+### If it does not appear on the TV
+
+1. **The laptop and the room must be on the same network**, and it must let
+   devices talk to each other. A guest network with client isolation will not
+   work — the video goes laptop-to-TV directly, so nothing can proxy it.
+2. **Safari cannot do this.** On a Mac or an iPhone use Screen Mirroring, which
+   is better anyway. Chrome, Edge and Firefox all work.
+3. **A meeting on the TV takes precedence.** Sharing is refused with a note
+   saying so, because the receiving half is the dashboard page and it cannot come
+   forward without dropping the call. Sharing inside the meeting is the better
+   answer regardless: the people who are not in the room see it too.
+4. Check the room agrees it is working: control panel → **Checks** →
+   *Sharing from a PC*, or `./scripts/roomctl status`.
+5. Restart it: control panel → **3 · Restart PC sharing**, or
+   `./scripts/roomctl restart cast`. It restarts in place, so the calendar and
+   the dashboard stay up.
+
+### Why not Miracast
+
+Windows has "Connect to a wireless display" built in, which would need no address
+typed at all. It is not used here: a Miracast sink on a Raspberry Pi needs Wi-Fi
+Direct support that the built-in adapter handles unreliably, and the stack is
+experimental. A flaky Miracast implementation is not worth risking the calendar,
+the join button and AirPlay for.
+
+Typing an address once is a smaller price than a room that sometimes does not
+work — and unlike Miracast, or AirPlay, this path needs no discovery protocol at
+all, so it also works on the networks that block mDNS.
 
 ---
 
 ## Troubleshooting
 
-Start here: **control panel → "If something looks wrong"**. Four numbered
+Start here: **control panel → "If something looks wrong"**. Five numbered
 buttons, safe to press in order. Each takes a few seconds and the room comes
 back on its own.
 
@@ -929,6 +1026,7 @@ Everything goes to the journal as structured, greppable lines:
 journalctl --user -u room-dashboard -f              # the backend
 journalctl --user -u room-kiosk -n 100              # Chromium
 journalctl --user -u room-airplay -n 100            # AirPlay
+journalctl --user -u room-dashboard | grep cast\.    # sharing from a PC
 journalctl --user -u room-watchdog -n 50            # the watchdog
 ./scripts/roomctl logs -f                           # all of them together
 ```
@@ -1031,6 +1129,9 @@ none needs another to be healthy in order to keep working.
 - **The kiosk is independent of the backend.** If the backend crashes, the TV
   keeps showing the page, which reconnects by itself. If Chromium crashes,
   systemd restarts it without disturbing anything else.
+- **PC sharing runs inside the backend** on two ports of its own, carrying the
+  sharing page and nothing else. It restarts in place (`roomctl restart cast`)
+  without touching the calendar or the dashboard.
 - **AirPlay is independent of both.** People can still share a screen while the
   room software is restarting.
 - **The remote is a separate process** because reading `/dev/input` needs the
@@ -1050,7 +1151,7 @@ The state machine picks exactly one, in this order of precedence:
 
 | Mode | When | The TV shows |
 | --- | --- | --- |
-| `screen-sharing` | Someone is mirroring | Their screen |
+| `screen-sharing` | Someone is mirroring, over AirPlay or from a PC | Their screen |
 | `meeting` | A meeting page is open | The meeting |
 | `offline` | No network | The dashboard, saying so |
 | `home` | Otherwise | The dashboard |
@@ -1063,6 +1164,8 @@ The state machine picks exactly one, in this order of precedence:
 | Chromium hangs | Health check notices after ~4 probes and restarts it |
 | Chromium drifts to an unexpected page | Navigated back to the dashboard |
 | UxPlay crashes | The supervisor restarts it and reports the restart |
+| A laptop sharing its screen closes its lid | The session times out and the dashboard comes back |
+| The TV's page reloads mid-share | It asks the laptop to send again; the picture returns by itself |
 | Backend crashes | systemd restarts it; the TV reconnects by itself |
 | Backend wedges | The watchdog restarts it from outside |
 | Internet disappears | Dashboard stays up, shows offline, reconnects on its own |
@@ -1093,6 +1196,9 @@ room-appliance/
 │   ├── cdp.py                  minimal Chrome DevTools Protocol client
 │   ├── poly_service.py         detect and select camera / mic / speaker
 │   ├── airplay_service.py      mirroring state from the UxPlay supervisor
+│   ├── cast_service.py         PC screen sharing: sessions and WebRTC signalling
+│   ├── cast_web.py             its two listeners, deliberately separate
+│   ├── tls.py                  the room's own certificate, for the sharing page
 │   ├── remote_service.py       evdev buttons → room actions
 │   ├── remote_runner.py        the separate process for room-remote.service
 │   ├── health_service.py       health reporting and self-repair
@@ -1179,6 +1285,8 @@ The most useful ones:
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join too |
 | `RETURN_HOME_MINUTES` | `2` | Grace period after a meeting ends |
 | `AIRPLAY_NAME` | *(room name)* | What appears in Screen Mirroring |
+| `CAST_ENABLED` | `true` | Screen sharing from a Windows/Linux/Chromebook laptop |
+| `CAST_PIN` | *(empty)* | Optional code a laptop must type before sharing |
 | `MICROPHONE_DEVICE` / `SPEAKER_DEVICE` / `CAMERA_DEVICE` | `auto` | `auto` finds the Poly bar |
 | `POLY_ANSWER_KEY` etc. | `KEY_ENTER` etc. | Remote button mapping |
 | `BACKGROUND_MODE` | `theme` | `theme`, `slideshow` or `solid` |
@@ -1353,7 +1461,7 @@ A test fails if you forget.
 ./scripts/roomctl doctor              full hardware check
 ./scripts/roomctl panel               the control-panel address and PIN status
 
-./scripts/roomctl restart [what]      browser | airplay | remote | backend | all
+./scripts/roomctl restart [what]      browser | airplay | cast | remote | backend | all
 ./scripts/roomctl start|stop [what]
 ./scripts/roomctl logs [unit] [-f]
 
@@ -1387,7 +1495,7 @@ Localhost needs no authentication; anything else needs the PIN, and every
 | `POST /api/actions/join` | `{}` for the next meeting, or `{"meeting_id": …}` |
 | `POST /api/actions/leave` · `/home` · `/retry-join` | |
 | `POST /api/actions/volume` · `/mute` | |
-| `POST /api/actions/restart` | `{"target": "browser｜airplay｜backend｜all"}` |
+| `POST /api/actions/restart` | `{"target": "browser｜airplay｜cast｜backend｜all"}` |
 | `POST /api/actions/reboot` · `/reset-safe` | |
 | `GET/POST /api/backgrounds` · `DELETE /api/backgrounds/<name>` | Slideshow images |
 | `GET /api/diagnostics` · `GET /api/logs` | |

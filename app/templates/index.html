@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <style>:root { --accent: {{ accent }}; }</style>
 </head>
-<body class="dashboard" data-csrf="{{ csrf }}">
+<body class="dashboard" data-csrf="{{ csrf }}" data-cast="{{ 'on' if cast_enabled else 'off' }}">
 
   <!-- Background: gradient, solid colour, or a slideshow of uploaded images -->
   <div class="backdrop" id="backdrop" aria-hidden="true">
@@ -74,16 +74,34 @@
     </section>
 
     <footer class="bottom">
-      <div class="sharing" id="sharing" >
-        <span class="sharing-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
-               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 6h16v9H4z"></path><path d="M9 19h6"></path><path d="M12 15v4"></path>
-          </svg>
-        </span>
-        <span class="sharing-text">
-          Screen Mirroring &rarr; <strong id="airplay-name">{{ room_name }}</strong>
-        </span>
+      <!-- How to get a screen onto this TV. Two lines because there are two
+           answers: Apple devices discover the room by themselves, a PC is
+           given an address to open. -->
+      <div class="sharing-ways">
+        <div class="sharing" id="sharing" >
+          <span class="sharing-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6h16v9H4z"></path><path d="M9 19h6"></path><path d="M12 15v4"></path>
+            </svg>
+          </span>
+          <span class="sharing-text">
+            Screen Mirroring &rarr; <strong id="airplay-name">{{ room_name }}</strong>
+          </span>
+        </div>
+
+        <div class="sharing sharing-cast" id="sharing-cast" hidden>
+          <span class="sharing-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="4" width="20" height="13" rx="1.5"></rect>
+              <path d="M8 21h8"></path><path d="M12 17v4"></path>
+            </svg>
+          </span>
+          <span class="sharing-text">
+            From a PC &rarr; <strong id="cast-url"></strong>
+          </span>
+        </div>
       </div>
 
       <div class="indicators" id="indicators"></div>
@@ -152,6 +170,13 @@
     </div>
   </section>
 
+  <!-- A screen being shared from a laptop over the network (cast_receiver.js).
+       Full-screen and opaque while it plays; the "Screen sharing" overlay below
+       stands down for it -->
+  <section class="cast-stage" id="cast-stage" hidden>
+    <video class="cast-video" id="cast-video" autoplay muted playsinline></video>
+  </section>
+
   <div class="toast" id="toast" hidden></div>
 
   <noscript>
@@ -162,5 +187,6 @@
   </noscript>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='cast_receiver.js') }}"></script>
 </body>
 </html>

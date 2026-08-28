@@ -143,6 +143,40 @@ AIRPLAY_EXTRA_ARGS: ''
 AIRPLAY_INTERRUPTS_MEETING: true
 
 # ----------------------------------------------------------------------
+# Screen sharing from a PC
+#   The other half of wireless sharing: a Windows PC, Chromebook or
+#   Linux laptop opens the address shown on the TV, presses one button
+#   and picks a window. Nothing to install. The video goes straight from
+#   the laptop to the TV over the room's network, so the Pi only
+#   introduces the two of them.
+# ----------------------------------------------------------------------
+# Lets a Windows, Linux or Chromebook laptop share its screen by opening
+# the address the TV shows. This opens a second port on the room's
+# network, carrying the sharing page and nothing else.
+CAST_ENABLED: true
+
+# The port in the address shown on the TV. Kept separate from the
+# dashboard port on purpose: this one is always open to the room's network
+# and carries only the sharing page, so opening it never exposes the
+# settings or the room controller.
+CAST_PORT: 8000
+
+# Where the page that actually captures the screen is served. Browsers
+# only allow screen capture over an encrypted connection, so the room
+# generates its own certificate — which is why a browser warns about it
+# once per laptop.
+CAST_SECURE_PORT: 8443
+
+# Optional code a laptop must type before it can share. Empty means anyone
+# who can reach the room's network can share, which matches how AirPlay
+# behaves by default.
+CAST_PIN: ''
+
+# Off, sharing still works for anyone who knows the address, but the TV
+# stops advertising it.
+CAST_SHOW_ON_TV: true
+
+# ----------------------------------------------------------------------
 # Poly conference bar
 #   The USB conference bar used as camera, microphone and speaker.
 # ----------------------------------------------------------------------

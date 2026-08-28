@@ -460,9 +460,19 @@ body.dashboard.hide-cursor { cursor: none; }
   flex-wrap: wrap;
 }
 
+/* Two ways to share, stacked: the footer has width to spare vertically and
+   none horizontally once the QR badge takes its corner. */
+.sharing-ways { display: flex; flex-direction: column; align-items: flex-start; gap: 0.3vw; }
+
 .sharing { display: inline-flex; align-items: center; gap: 0.85vw; }
 .sharing-icon { display: inline-flex; font-size: 1.7vw; color: var(--text-faint); }
 .sharing strong { color: var(--text); font-weight: 600; }
+
+/* The PC address is secondary to the AirPlay name — Apple devices are the
+   common case and find the room on their own — so it is a size down. */
+.sharing-cast { font-size: 1.1vw; }
+.sharing-cast .sharing-icon { font-size: 1.45vw; }
+.sharing-cast strong { color: var(--text-dim); }
 
 .indicators { display: inline-flex; align-items: center; gap: 1.5vw; flex-wrap: wrap; }
 
@@ -746,3 +756,40 @@ html[data-theme="light"] .overlay { background: rgba(238, 241, 246, 0.96); }
 @media (prefers-reduced-motion: reduce) {
   .backdrop-layer, .backdrop-video, .backdrop-shade, .join-button { transition: none; }
 }
+
+
+/* ------------------------------------------------ a screen shared from a PC */
+
+/* The video arrives over WebRTC from a laptop on the room's network
+   (cast_receiver.js). It is the only thing on the TV while it plays, so it
+   sits above every overlay and paints its own black surround: a shared
+   4:3 window on a 16:9 TV should letterbox, never stretch. */
+.cast-stage {
+  position: fixed;
+  inset: 0;
+  /* Above the overlays (10), below the toast (20) and the no-JavaScript
+     banner (30): a shared screen covers the dashboard, but pressing mute on a
+     phone should still show its confirmation on the TV. */
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.cast-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* While there is a real picture, the dashboard's "Screen sharing" placeholder
+   has nothing to add. Done in CSS rather than JavaScript so it is correct the
+   instant the video starts, not at the next poll. */
+body.cast-playing .overlay-sharing { display: none !important; }
+
+/* Nothing else on the TV competes with a shared screen. */
+body.cast-playing .controller-badge,
+body.cast-playing .screen,
+body.cast-playing .backdrop { visibility: hidden; }

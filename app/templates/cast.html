@@ -1,0 +1,97 @@
+{#
+  The sharing page, opened on a laptop. Served only over the HTTPS listener in
+  cast_web.py, because a browser will not hand a page the screen otherwise.
+
+  Deliberately NOT extending base.html: this page is handed to a visitor with a
+  meeting to start, and that layout links to the room's Settings. It has one
+  job, one button, and no navigation at all.
+#}
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark light">
+  <title>Share your screen — {{ room_name }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='cast.css') }}">
+  <style>:root { --accent: {{ accent }}; }</style>
+</head>
+<body class="cast" data-pin-required="{{ 'yes' if pin_required else 'no' }}">
+
+  <main class="wrap">
+
+    <header class="head">
+      <p class="eyebrow">Share your screen with</p>
+      <h1 class="room">{{ room_name }}</h1>
+    </header>
+
+    {% if not enabled %}
+      <section class="card card-off">
+        <h2 class="card-title">Screen sharing is switched off in this room</h2>
+        <p class="card-note">Ask whoever looks after this room to turn it on in Settings.</p>
+      </section>
+    {% else %}
+
+      <!-- The whole page, really: one button. Everything else appears only
+           when it has something to say. -->
+      <section class="stage">
+        <button class="share" id="share-button" type="button">
+          <span class="share-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 5h16v11H4z"></path><path d="M8 20h8"></path><path d="M12 16v4"></path>
+            </svg>
+          </span>
+          <span class="share-label" id="share-label">Share this screen</span>
+        </button>
+
+        <p class="stage-note" id="stage-note">
+          Your browser will ask which window or screen to send.
+        </p>
+
+        <div class="pin-row" id="pin-row" hidden>
+          <label class="pin-label" for="pin-input">Room sharing code</label>
+          <input class="pin-input" id="pin-input" type="text" inputmode="numeric"
+                 autocomplete="off" maxlength="12" placeholder="••••">
+        </div>
+
+        <p class="message" id="message" hidden role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- Shown while sharing, so the person can tell it is working without
+           looking up at the TV, and can stop from here. -->
+      <section class="live" id="live" hidden>
+        <p class="live-line">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span id="live-text">Your screen is on the room display</span>
+        </p>
+        <video class="preview" id="preview" muted playsinline autoplay></video>
+        <button class="stop" id="stop-button" type="button">Stop sharing</button>
+      </section>
+
+      <details class="help" id="help">
+        <summary>It is not appearing on the TV</summary>
+        <ul class="help-list">
+          <li>You and the room must be on the same Wi-Fi network. A guest
+            network that keeps devices apart will not work.</li>
+          <li>Chrome, Edge and Firefox can all do this. Safari on a Mac cannot
+            — use Screen Mirroring there instead, it is better.</li>
+          <li>If you picked <em>a window</em> and it looks frozen, that window
+            may be minimised. Pick <em>Entire screen</em> instead.</li>
+          <li>Nothing at all on the TV? The room screen may be showing a
+            meeting. Stopping the meeting on the TV lets sharing through.</li>
+        </ul>
+      </details>
+
+    {% endif %}
+  </main>
+
+  <footer class="foot">
+    <span>Room appliance {{ version }}</span>
+  </footer>
+
+  <script src="{{ url_for('static', filename='cast.js') }}"></script>
+</body>
+</html>

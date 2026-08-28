@@ -1,0 +1,331 @@
+/* ==========================================================================
+   The screen-sharing page a laptop opens (/share and the HTTPS sender page).
+
+   Its own stylesheet, like the phone controller has: this page is opened by a
+   visitor who has never seen it, on a laptop, with a meeting about to start.
+   So there is one button, it is enormous, and everything else on the page is
+   either an explanation of that button or hidden until it has something to
+   say.
+   ========================================================================== */
+
+:root {
+  --accent: #3d8bfd;
+
+  --bg: #0a0f1a;
+  --surface: #121a2a;
+  --surface-2: #182236;
+  --border: #26324a;
+  --text: #eef2f8;
+  --text-dim: #9aa7bd;
+  --text-faint: #6f7c92;
+
+  --ok: #3ddc84;
+  --warn: #ffb020;
+  --error: #ff5d5d;
+
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+}
+
+html[data-theme="light"] {
+  --bg: #eef1f6;
+  --surface: #ffffff;
+  --surface-2: #f5f7fb;
+  --border: #d8dee9;
+  --text: #101828;
+  --text-dim: #4d5871;
+  --text-faint: #77839a;
+  --shadow: 0 6px 20px rgba(16, 24, 40, 0.10);
+}
+
+* { box-sizing: border-box; }
+
+/* The `hidden` attribute must beat every author rule below: a class that sets
+   `display` outranks the browser's built-in `[hidden] { display: none }`, so
+   without this an "invisible" panel stays on screen. */
+[hidden] { display: none !important; }
+
+html { background: var(--bg); }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  flex: 1;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 40px 20px 24px;
+}
+
+/* --------------------------------------------------------------------- head */
+
+.head { text-align: center; margin-bottom: 28px; }
+
+.eyebrow {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.room {
+  margin: 4px 0 0;
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* -------------------------------------------------------------------- stage */
+
+.stage { text-align: center; }
+
+/* The one thing on the page. Sized so it is unmistakably the thing to press,
+   from a laptop screen at arm's length. */
+.share {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 108px;
+  padding: 20px 24px;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 1.35rem;
+  font-weight: 620;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+
+.share:hover:not(:disabled) { filter: brightness(1.07); }
+.share:active:not(:disabled) { transform: translateY(1px); }
+
+.share:disabled {
+  opacity: 0.55;
+  cursor: default;
+  box-shadow: none;
+}
+
+.share:focus-visible {
+  outline: 3px solid var(--text);
+  outline-offset: 3px;
+}
+
+.share-icon { display: flex; font-size: 1.7rem; }
+
+.stage-note {
+  margin: 16px 0 0;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
+/* ---------------------------------------------------------------- PIN entry */
+
+.pin-row {
+  margin: 22px auto 0;
+  max-width: 260px;
+  text-align: left;
+}
+
+.pin-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.pin-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.3rem;
+  letter-spacing: 0.25em;
+  text-align: center;
+}
+
+.pin-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ message */
+
+.message {
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--text-faint);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+}
+
+.message.error { border-left-color: var(--error); color: var(--text); }
+.message.warn { border-left-color: var(--warn); color: var(--text); }
+
+/* --------------------------------------------------------------------- live */
+
+.live {
+  margin-top: 8px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
+
+.live-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  font-size: 1.1rem;
+  font-weight: 560;
+}
+
+.live-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 0 rgba(61, 220, 132, 0.55);
+  animation: pulse 2.2s ease-out infinite;
+}
+
+@keyframes pulse {
+  70% { box-shadow: 0 0 0 12px rgba(61, 220, 132, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(61, 220, 132, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
+/* A small mirror of what the room is seeing. It is the fastest way to answer
+   "is it actually my slides, or my email?" without turning round. */
+.preview {
+  width: 100%;
+  max-height: 220px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: #000;
+  object-fit: contain;
+}
+
+.stop {
+  margin-top: 16px;
+  width: 100%;
+  min-height: 54px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.stop:hover { border-color: var(--error); color: var(--error); }
+
+/* ------------------------------------------------- the certificate warning */
+
+.warned {
+  margin: 22px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  text-align: left;
+}
+
+.warned-title {
+  margin: 0 0 6px;
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.warned-body {
+  margin: 0;
+  font-size: 0.92rem;
+  color: var(--text-dim);
+}
+
+/* --------------------------------------------------------------- card / help */
+
+.card {
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card-title { margin: 0 0 8px; font-size: 1.15rem; font-weight: 620; }
+.card-note { margin: 0 0 8px; color: var(--text-dim); font-size: 0.95rem; }
+.card-note:last-child { margin-bottom: 0; }
+
+.alt {
+  margin: 28px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.92rem;
+  text-align: center;
+}
+
+.help {
+  margin-top: 26px;
+  color: var(--text-dim);
+  font-size: 0.92rem;
+}
+
+.help > summary {
+  cursor: pointer;
+  padding: 10px 0;
+  color: var(--text-dim);
+}
+
+.help-list { margin: 6px 0 0; padding-left: 20px; }
+.help-list li { margin-bottom: 8px; }
+
+code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 0.9em;
+  word-break: break-all;
+}
+
+/* --------------------------------------------------------------------- foot */
+
+.foot {
+  padding: 16px 20px 22px;
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 0.78rem;
+}

@@ -40,6 +40,8 @@ from .airplay_service import AirPlayService
 from .background_service import MAX_VIDEO_BYTES, BackgroundService
 from .browser_service import BrowserService
 from .calendar_service import CalendarService
+from .cast_service import CastService
+from .cast_web import CastServer
 from .config import ConfigManager, advisories, get_config
 from .config_schema import FIELDS_BY_KEY, SECRET_KEYS, grouped_fields
 from .health_service import HealthService
@@ -50,6 +52,7 @@ from .models import MODES
 from .poly_service import PolyService
 from .remote_service import ACTIONS, RemoteService
 from .system_service import MANAGED_UNITS, SystemService
+from .tls import certificate_summary
 from .web_security import (
     check_csrf,
     controller_token,
@@ -82,20 +85,26 @@ class RoomAppliance:
         self.calendar = CalendarService(config)
         self.browser = BrowserService(config, self.system)
         self.airplay = AirPlayService(config, self.system)
+        self.cast = CastService(config)
         self.poly = PolyService(config)
         self.backgrounds = BackgroundService()
         self.room = MeetingService(
-            config, self.calendar, self.browser, self.airplay, self.poly, self.system
+            config, self.calendar, self.browser, self.airplay, self.cast,
+            self.poly, self.system,
         )
         self.health = HealthService(
             config,
             self.calendar,
             self.browser,
             self.airplay,
+            self.cast,
             self.poly,
             self.room,
             self.system,
         )
+        # Screen sharing from a PC listens on its own ports; see cast_web.py for
+        # why it is not simply more routes on the dashboard.
+        self.cast_server = CastServer(self)
         self.remote = RemoteService(config, self._on_remote_action)
         self._started = False
         config.on_change(self._on_config_change)
@@ -113,6 +122,28 @@ class RoomAppliance:
                 self.remote.start()
             else:
                 self.remote.stop()
+        if changed & {"CAST_ENABLED", "CAST_PORT", "CAST_SECURE_PORT"}:
+            self._reconfigure_cast()
+
+    def _reconfigure_cast(self) -> None:
+        """Apply a sharing settings change without restarting the room.
+
+        In its own thread: closing a listener waits for its serving loop to
+        notice, and somebody saving the Settings page should not sit watching a
+        spinner while that happens. A room on a wall has no keyboard, so
+        "restart the backend to apply this" is a worse answer than it sounds.
+        """
+        if not self._started:
+            # The services are not running — a test, or a tool that wants the
+            # app object and nothing else. Saving a setting must never be the
+            # thing that opens a network port.
+            return
+
+        def apply() -> None:
+            self.cast.end_current(reason="the room's sharing settings changed")
+            self.cast_server.restart()
+
+        threading.Thread(target=apply, name="cast-reconfigure", daemon=True).start()
 
     def start(self) -> None:
         if self._started:
@@ -132,10 +163,12 @@ class RoomAppliance:
         self.room.start()
         self.health.start()
         self.remote.start()
+        self.cast_server.start()
 
     def stop(self) -> None:
         log_event(log, logging.INFO, "application.stopping")
-        for service in (self.remote, self.health, self.room, self.poly, self.calendar):
+        for service in (self.cast_server, self.remote, self.health, self.room,
+                       self.poly, self.calendar):
             try:
                 service.stop()
             except Exception:  # pragma: no cover
@@ -206,6 +239,9 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "setup_required": config.setup_required(),
             "panel_enabled": config.bool_("PANEL_ENABLED"),
             "controller_enabled": config.bool_("CONTROLLER_ENABLED"),
+            # The dashboard hosts the receiving half of PC screen sharing, so
+            # the page has to know whether to run it at all.
+            "cast_enabled": config.bool_("CAST_ENABLED"),
         }
 
     @app.after_request
@@ -218,6 +254,10 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "Content-Security-Policy",
             "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
             "script-src 'self'; connect-src 'self'; font-src 'self'; "
+            # The dashboard plays a screen shared from a laptop, which is a peer
+            # connection and not a fetch, so connect-src does not cover it.
+            # Stated explicitly; browsers that predate the directive ignore it.
+            "webrtc 'allow'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
         if request.path.startswith("/api/"):
@@ -358,6 +398,10 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "components": health["components"],
         }
         payload["panel_url"] = _panel_url()
+        # The state machine supplies what the cast service knows; the address
+        # depends on the request and the machine's interfaces, so it is added
+        # here rather than inside the service.
+        payload["cast"] = {**(payload.get("cast") or {}), **_cast_hint()}
         payload["controller"] = _controller_hint()
         payload["setup"] = _setup_hint()
         payload["version"] = __version__
@@ -428,6 +472,22 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     def _controller_url() -> str:
         """The address inside the QR code: pairs the phone and opens the page."""
         return f"http://{_room_host()}/c/{controller_token()}"
+
+    def _cast_hint() -> dict[str, Any]:
+        """The address a laptop types to share its screen, and whether to show it.
+
+        Not a secret, unlike the controller's pairing code: it leads to a page
+        with one button on it and no access to anything. So it goes in the
+        general payload, which is what lets the control panel show it to
+        somebody who is emailing it to a visitor.
+        """
+        hint: dict[str, Any] = {"show_on_tv": config.bool_("CAST_SHOW_ON_TV")}
+        port = appliance.cast_server.port
+        addresses = _lan_addresses()
+        # Without the plain-HTTP entry point there is no address worth putting
+        # on a TV: "https://…:8443" typed by hand is not a room instruction.
+        hint["url"] = f"{addresses[0]}:{port}" if port and addresses else ""
+        return hint
 
     def _controller_hint() -> dict[str, Any]:
         """What the corner of the TV should show.
@@ -652,6 +712,82 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         appliance.airplay.simulate_sharing(bool(payload.get("sharing")))
         return ok(sharing=appliance.airplay.sharing)
 
+    # -- screen sharing from a PC: the receiving half --------------------
+    #
+    # The dashboard page on the TV is what plays an incoming laptop screen, so
+    # these are its endpoints and nobody else's. Localhost only, and the
+    # sending half never touches them: it talks to the separate listeners in
+    # cast_web.py, which is what keeps this port out of the bargain.
+    def _receiver_blocked():
+        if not is_local_request():
+            return fail("Local requests only.", 403)
+        if not config.bool_("CAST_ENABLED"):
+            return fail("Screen sharing from a PC is switched off.", 409)
+        return None
+
+    @app.route("/api/cast/receiver")
+    def api_cast_receiver():
+        blocked = _receiver_blocked()
+        if blocked is not None:
+            return blocked
+        return ok(**appliance.cast.poll_receiver())
+
+    @app.route("/api/cast/receiver/answer", methods=["POST"])
+    @require_csrf
+    def api_cast_answer():
+        blocked = _receiver_blocked()
+        if blocked is not None:
+            return blocked
+        payload = request.get_json(silent=True) or {}
+        answer = payload.get("sdp")
+        if not isinstance(answer, dict):
+            return fail("That is not a usable answer.")
+        if not appliance.cast.submit_answer(str(payload.get("session") or ""), answer):
+            return fail("That sharing session has gone.", 409)
+        return ok()
+
+    @app.route("/api/cast/receiver/candidate", methods=["POST"])
+    @require_csrf
+    def api_cast_receiver_candidate():
+        blocked = _receiver_blocked()
+        if blocked is not None:
+            return blocked
+        payload = request.get_json(silent=True) or {}
+        candidate = payload.get("candidate")
+        if not isinstance(candidate, dict):
+            return fail("That is not a usable network candidate.")
+        if not appliance.cast.submit_candidate(
+            str(payload.get("session") or ""), candidate, from_sender=False
+        ):
+            return fail("That sharing session has gone.", 409)
+        return ok()
+
+    @app.route("/api/cast/receiver/renegotiate", methods=["POST"])
+    @require_csrf
+    def api_cast_renegotiate():
+        """A reloaded room screen asking the laptop to offer its stream again."""
+        blocked = _receiver_blocked()
+        if blocked is not None:
+            return blocked
+        payload = request.get_json(silent=True) or {}
+        if not appliance.cast.request_renegotiation(str(payload.get("session") or "")):
+            return fail("That sharing session has gone.", 409)
+        return ok()
+
+    @app.route("/api/cast/receiver/failed", methods=["POST"])
+    @require_csrf
+    def api_cast_receiver_failed():
+        """The TV could not play the stream; do not leave the room looking shared."""
+        blocked = _receiver_blocked()
+        if blocked is not None:
+            return blocked
+        payload = request.get_json(silent=True) or {}
+        appliance.cast.receiver_failed(
+            str(payload.get("session") or ""),
+            reason=str(payload.get("reason") or "")[:120],
+        )
+        return ok()
+
     # -- restarts and recovery -------------------------------------------
     @app.route("/api/actions/restart", methods=["POST"])
     @require_admin
@@ -665,12 +801,25 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "airplay": ("room-airplay.service", "AirPlay is restarting."),
             "remote": ("room-remote.service", "The remote handler is restarting."),
             "backend": ("room-dashboard.service", "The room software is restarting."),
+            # "cast" is handled above: it has no unit of its own.
             "update": (
                 "room-update.service",
                 "Checking for a software update. The room restarts itself if "
                 "there is one.",
             ),
         }
+
+        if target == "cast":
+            # No systemd unit to bounce: the sharing listeners live in this
+            # process, so restarting them means restarting them here.
+            appliance.cast.end_current(reason="screen sharing was restarted")
+            if appliance.cast_server.restart():
+                return ok(detail="Screen sharing from a PC has restarted.")
+            return fail(
+                appliance.cast_server.error
+                or "Screen sharing could not be restarted. Check the room's logs.",
+                409,
+            )
 
         if target == "all":
             # Order matters: the browser last, so it reloads a healthy backend.
@@ -882,6 +1031,12 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
                 "calendar": appliance.calendar.status(),
                 "browser": appliance.browser.status(),
                 "airplay": appliance.airplay.status(),
+                "cast": {
+                    **appliance.cast.status(),
+                    "port": appliance.cast_server.port,
+                    "secure_port": appliance.cast_server.secure_port,
+                    "certificate": certificate_summary(),
+                },
                 "units": {u: appliance.system.unit_state(u) for u in MANAGED_UNITS},
                 "join_flows": {
                     pid: {
@@ -941,6 +1096,21 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             return fail(f"Unknown action: {action}")
         result = appliance.room.dispatch_action(action)
         return jsonify({"ok": bool(result.get("ok")), **result})
+
+    @app.route("/api/internal/restart-cast", methods=["POST"])
+    @require_internal
+    def api_internal_restart_cast():
+        """``roomctl restart cast``.
+
+        PC sharing has no systemd unit — its listeners live in this process — so
+        there is nothing for ``systemctl`` to bounce and this is the equivalent.
+        """
+        appliance.cast.end_current(reason="screen sharing was restarted")
+        if appliance.cast_server.restart():
+            return ok(detail="Screen sharing from a PC has restarted.")
+        return fail(
+            appliance.cast_server.error or "Screen sharing could not be restarted.", 409
+        )
 
     @app.route("/api/internal/token-check")
     @require_internal

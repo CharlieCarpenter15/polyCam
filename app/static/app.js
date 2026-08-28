@@ -341,9 +341,12 @@
 
   var INDICATOR_LABELS = {
     network: "Network", calendar: "Calendar", camera: "Camera",
-    microphone: "Mic", speaker: "Speaker", airplay: "AirPlay", browser: "Display"
+    microphone: "Mic", speaker: "Speaker", airplay: "AirPlay",
+    cast: "PC share", browser: "Display"
   };
-  var INDICATOR_ORDER = ["network", "calendar", "camera", "microphone", "speaker", "airplay"];
+  var INDICATOR_ORDER = [
+    "network", "calendar", "camera", "microphone", "speaker", "airplay", "cast"
+  ];
 
   function renderIndicators(payload) {
     var host = $("indicators");
@@ -371,7 +374,11 @@
     var sharing = payload.mode === "screen-sharing";
     show($("overlay-sharing"), sharing);
     if (sharing) {
-      var client = (payload.airplay && payload.airplay.client) || "";
+      // Either receiver can be the one sharing; whichever it is, the name is
+      // what the person in the room recognises.
+      var airplayClient = (payload.airplay && payload.airplay.client) || "";
+      var castClient = (payload.cast && payload.cast.client) || "";
+      var client = airplayClient || castClient;
       setText("sharing-client", client ? "Shared from " + client : "");
     }
 
@@ -400,9 +407,17 @@
 
   function renderFooter(payload) {
     var airplay = payload.airplay || {};
+    var cast = payload.cast || {};
     var display = payload.display || {};
     setText("airplay-name", airplay.name || payload.room.name || "Meeting Room");
     show($("sharing"), !!display.show_instructions && airplay.enabled !== false);
+
+    // An address is only sent when a laptop can actually reach it, so its
+    // presence is the whole condition for showing this line.
+    var castUrl = cast.url || "";
+    var showCast = !!display.show_instructions && !!castUrl && cast.show_on_tv !== false;
+    show($("sharing-cast"), showCast);
+    if (castUrl) setText("cast-url", castUrl);
 
     // Two addresses in one corner is clutter, and the badge is the one people
     // can act on, so the panel hint gives way while it is on screen.

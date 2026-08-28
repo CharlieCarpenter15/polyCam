@@ -112,6 +112,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("calendar", "Calendar"),
     ("meetings", "Meeting joining"),
     ("airplay", "AirPlay screen sharing"),
+    ("cast", "Screen sharing from a PC"),
     ("audio", "Poly conference bar"),
     ("remote", "Poly remote / controller"),
     ("controller", "Room controller (phone)"),
@@ -128,6 +129,11 @@ GROUP_HELP: dict[str, str] = {
     "dropped in later without touching the rest of the appliance.",
     "meetings": "How the appliance behaves around meeting start and end times.",
     "airplay": "Wireless screen sharing from a Mac, iPhone or iPad.",
+    "cast": "The other half of wireless sharing: a Windows PC, Chromebook or\n"
+    "Linux laptop opens the address shown on the TV, presses one button and\n"
+    "picks a window. Nothing to install. The video goes straight from the\n"
+    "laptop to the TV over the room's network, so the Pi only introduces the\n"
+    "two of them.",
     "audio": "The USB conference bar used as camera, microphone and speaker.",
     "remote": "Optional physical remote / controller buttons.",
     "controller": "The big-button page anyone in the room can open by scanning\n"
@@ -508,6 +514,65 @@ FIELDS: tuple[Field, ...] = (
         "Off: mirroring is refused during a meeting. Either way, sharing through "
         "Teams or Meet is better, because remote participants can see it too.",
         advanced=True,
+    ),
+    # -- Screen sharing from a PC ------------------------------------------
+    Field(
+        key="CAST_ENABLED",
+        type="bool",
+        default=True,
+        group="cast",
+        label="Enable screen sharing from a PC",
+        help="Lets a Windows, Linux or Chromebook laptop share its screen by "
+        "opening the address the TV shows. This opens a second port on the "
+        "room's network, carrying the sharing page and nothing else.",
+    ),
+    Field(
+        key="CAST_PORT",
+        type="int",
+        default=8000,
+        minimum=1024,
+        maximum=65535,
+        group="cast",
+        label="Sharing address port",
+        help="The port in the address shown on the TV. Kept separate from the "
+        "dashboard port on purpose: this one is always open to the room's "
+        "network and carries only the sharing page, so opening it never exposes "
+        "the settings or the room controller.",
+        advanced=True,
+    ),
+    Field(
+        key="CAST_SECURE_PORT",
+        type="int",
+        default=8443,
+        minimum=1024,
+        maximum=65535,
+        group="cast",
+        label="Secure sharing port",
+        help="Where the page that actually captures the screen is served. "
+        "Browsers only allow screen capture over an encrypted connection, so "
+        "the room generates its own certificate — which is why a browser warns "
+        "about it once per laptop.",
+        advanced=True,
+    ),
+    Field(
+        key="CAST_PIN",
+        type="password",
+        default="",
+        group="cast",
+        label="Sharing code",
+        help="Optional code a laptop must type before it can share. Empty means "
+        "anyone who can reach the room's network can share, which matches how "
+        "AirPlay behaves by default.",
+        secret=True,
+    ),
+    Field(
+        key="CAST_SHOW_ON_TV",
+        type="bool",
+        default=True,
+        group="cast",
+        label="Show the sharing address on the TV",
+        help="Off, sharing still works for anyone who knows the address, but "
+        "the TV stops advertising it.",
     ),
     # -- Poly conference bar -----------------------------------------------
     Field(

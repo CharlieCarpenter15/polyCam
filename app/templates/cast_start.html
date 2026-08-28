@@ -1,0 +1,97 @@
+{#
+  The short address people type on a laptop: http://<room>:<port>/share.
+
+  It exists because of one unavoidable fact. A browser only lets a page capture
+  the screen over HTTPS, and no certificate authority will issue a certificate
+  for a private address, so the room signs its own — and the browser says so.
+  Sending somebody straight into that warning with no explanation is how a
+  feature gets abandoned in the first ten seconds, so this page says plainly
+  what is about to happen and why it is expected.
+
+  One click, once per laptop. After that the browser remembers.
+#}
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="color-scheme" content="dark light">
+  <title>Share your screen — {{ room_name }}</title>
+  <link rel="icon" href="{{ url_for('static', filename='assets/favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='cast.css') }}">
+  <style>:root { --accent: {{ accent }}; }</style>
+</head>
+<body class="cast">
+
+  <main class="wrap">
+
+    <header class="head">
+      <p class="eyebrow">Share your screen with</p>
+      <h1 class="room">{{ room_name }}</h1>
+    </header>
+
+    {% if not cast_enabled %}
+      <section class="card card-off">
+        <h2 class="card-title">Screen sharing from a PC is switched off in this room</h2>
+        <p class="card-note">
+          Ask whoever looks after this room to turn it on: Settings &rarr;
+          Screen sharing from a PC.
+        </p>
+      </section>
+
+    {% elif not secure_url %}
+      <section class="card card-off">
+        <h2 class="card-title">This room cannot offer screen sharing yet</h2>
+        <p class="card-note">
+          {{ blocked_reason or "The secure connection the browser needs is not
+          available." }}
+        </p>
+        <p class="card-note">
+          A Mac, iPhone or iPad can still share right now: Screen Mirroring
+          &rarr; <strong>{{ airplay_name }}</strong>.
+        </p>
+      </section>
+
+    {% else %}
+      <section class="stage">
+        <a class="share share-link" href="{{ secure_url }}">
+          <span class="share-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+                 stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 5h16v11H4z"></path><path d="M8 20h8"></path><path d="M12 16v4"></path>
+            </svg>
+          </span>
+          <span class="share-label">Continue to sharing</span>
+        </a>
+
+        <div class="warned">
+          <p class="warned-title">Your browser will warn you about this room first</p>
+          <p class="warned-body">
+            Sharing a screen needs a secure connection, and a device on a local
+            network cannot get a certificate the internet has heard of — so this
+            room signs its own. Choose <strong>Advanced</strong> and then
+            <strong>Continue</strong> (or <strong>Accept the risk</strong> in
+            Firefox). Your browser remembers, so this is a one-time step.
+          </p>
+        </div>
+
+        <p class="stage-note">
+          Prefer to type it directly? <code>{{ secure_url }}</code>
+        </p>
+      </section>
+    {% endif %}
+
+    <p class="alt">
+      On a Mac, iPhone or iPad? Use Screen Mirroring &rarr;
+      <strong>{{ airplay_name }}</strong> instead — no warning, nothing to type.
+    </p>
+
+  </main>
+
+  <footer class="foot">
+    <span>Room appliance {{ version }}</span>
+  </footer>
+
+</body>
+</html>
