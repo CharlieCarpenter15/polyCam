@@ -146,6 +146,7 @@
     $("background-dim").value = config.dim === undefined ? 55 : config.dim;
     $("dim-value").textContent = ($("background-dim").value) + "%";
     $("background-shuffle").checked = !!config.shuffle;
+    $("background-video-sound").checked = !!config.video_sound;
     suppressBackgroundSave = false;
     show($("slideshow-options"), (config.mode || "theme") === "slideshow");
   }
@@ -153,20 +154,38 @@
   function loadBackgrounds() {
     return R.get("/api/backgrounds").then(function (data) {
       var grid = $("thumb-grid");
-      var html = (data.images || []).map(function (image) {
-        return '<div class="thumb" style="background-image:url(\'' + R.escapeHtml(image.url) + '\')">' +
-          '<button class="thumb-remove" data-remove="' + R.escapeHtml(image.name) +
-          '" aria-label="Remove image">&times;</button></div>';
+      var items = data.images || [];
+      var html = items.map(function (item) {
+        var name = R.escapeHtml(item.name);
+        var remove = '<button class="thumb-remove" data-remove="' + name +
+          '" aria-label="Remove">&times;</button>';
+        var size = '<span class="thumb-size">' + Math.round((item.size_kb || 0) / 1024 * 10) / 10 +
+          " MB</span>";
+        if (item.kind === "video") {
+          // A poster frame, so the tile says which clip this is. Muted and
+          // preload="metadata" keeps a phone from pulling 200 MB to draw it.
+          return '<div class="thumb thumb-video">' +
+            '<video class="thumb-video-media" src="' + R.escapeHtml(item.url) +
+            '" preload="metadata" muted playsinline></video>' +
+            '<span class="thumb-badge" aria-hidden="true">▶</span>' +
+            size + remove + "</div>";
+        }
+        return '<div class="thumb" style="background-image:url(\'' + R.escapeHtml(item.url) + '\')">' +
+          size + remove + "</div>";
       }).join("");
 
       if (data.uploads_allowed) {
-        html += '<button class="upload-tile" id="upload-tile">+ Add images</button>';
+        html += '<button class="upload-tile" id="upload-tile">+ Add images or video</button>';
       }
       grid.innerHTML = html;
 
-      $("background-count").textContent = data.count + " / " + data.max + " images";
+      var videos = data.videos || 0;
+      $("background-count").textContent = data.count + " / " + data.max +
+        (videos ? " · " + videos + (videos === 1 ? " video" : " videos") : "");
       $("upload-note").textContent = data.uploads_allowed
-        ? "JPEG, PNG, GIF or WebP, up to " + data.max_size_mb + " MB each."
+        ? "Images (JPEG, PNG, GIF, WebP) up to " + data.max_size_mb +
+          " MB. Video (MP4, WebM, MOV) up to " + (data.max_video_mb || 200) +
+          " MB — each clip plays right through before the next slide."
         : "Uploads are switched off in Settings.";
 
       var tile = $("upload-tile");
@@ -185,7 +204,7 @@
       if (!queue.length) {
         loadBackgrounds().then(poll);
         if (failures.length) R.toast(failures[0], "error");
-        else if (uploaded) R.toast("Added " + uploaded + " image" + (uploaded === 1 ? "" : "s"), "ok");
+        else if (uploaded) R.toast("Added " + uploaded + " file" + (uploaded === 1 ? "" : "s"), "ok");
         return;
       }
       var file = queue.shift();
@@ -215,11 +234,19 @@
       BACKGROUND_MODE: $("background-mode").value,
       BACKGROUND_SLIDESHOW_SECONDS: Number($("background-seconds").value),
       BACKGROUND_DIM_PERCENT: Number($("background-dim").value),
-      BACKGROUND_SHUFFLE: $("background-shuffle").checked
+      BACKGROUND_SHUFFLE: $("background-shuffle").checked,
+      BACKGROUND_VIDEO_SOUND: $("background-video-sound").checked
     };
     R.post("/api/settings", payload)
       .then(function () { R.toast("Background updated", "ok"); poll(); })
       .catch(function (error) { R.toast(error.message, "error"); });
+  }
+
+  /* The image is served no-store, but a stale copy in the phone's memory cache
+     would still show the code that was just rotated away. */
+  function refreshControllerCode() {
+    var image = $("controller-qr");
+    if (image) image.src = "/qr/controller.svg?scale=6&t=" + Date.now();
   }
 
   var saveTimer = null;
@@ -308,6 +335,7 @@
     });
     $("background-dim").addEventListener("change", saveBackgroundSoon);
     $("background-shuffle").addEventListener("change", saveBackgroundSettings);
+    $("background-video-sound").addEventListener("change", saveBackgroundSettings);
 
     $("upload-input").addEventListener("change", function () {
       uploadFiles(this.files);
@@ -351,6 +379,20 @@
       R.withButton(this, function () { return R.post("/api/actions/reboot"); })
         .catch(function () {});
     });
+
+    var newCode = $("controller-code");
+    if (newCode) {
+      newCode.addEventListener("click", function () {
+        var button = this;
+        if (!R.confirmAction(
+          "Issue a new room code?\n\nEvery phone using the controller right now " +
+          "will be signed out and has to scan the new code on the TV."
+        )) return;
+        R.withButton(button, function () { return R.post("/api/actions/controller-code"); })
+          .then(refreshControllerCode)
+          .catch(function () {});
+      });
+    }
 
     var signOut = $("sign-out");
     if (signOut) {

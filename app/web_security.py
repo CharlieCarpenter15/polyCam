@@ -13,12 +13,25 @@ The rules, in plain terms:
 * **Background services** (the AirPlay supervisor, the watchdog) authenticate
   with a shared secret from a root-readable file instead of a cookie, so they are
   unaffected by the above.
+* **The room controller** is the QR code on the TV, and what it grants is a
+  deliberate choice with two settings behind it. By default
+  (``CONTROLLER_FULL_ACCESS``) scanning it makes that phone an administrator:
+  the appliance is a Pi on a wall with no keyboard, and the point of the code
+  is that a phone can do everything a keyboard could — including the first-run
+  setup, which has to happen before a PIN exists to ask for. The code is shown
+  on the room's own screen and served nowhere else, so the trade is "whoever
+  can see this screen can run this room", which is close to what standing in
+  the room already means. Turn ``CONTROLLER_FULL_ACCESS`` off and a scanned
+  phone gets the room buttons only — join, leave, mute, camera, volume, the
+  set a physical remote has — with everything else asking for the PIN. Turn on
+  ``CONTROLLER_REQUIRE_PIN`` and scanning grants nothing without it.
 
 PIN checks use a constant-time comparison and are rate-limited per client.
 """
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import secrets
@@ -42,6 +55,9 @@ PIN_LOCKOUT_SECONDS = 120.0
 
 _SECRET_KEY_FILE = paths.VAR_DIR / "flask-secret-key"
 _INTERNAL_TOKEN_FILE = paths.VAR_DIR / "internal-token"
+
+#: Session key holding the stamp of the pairing code a phone scanned.
+CONTROLLER_SESSION_KEY = "controller"
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +94,43 @@ def flask_secret_key() -> str:
 def internal_token() -> str:
     """Shared secret for ``/api/internal/*`` (helper scripts)."""
     return _read_or_create_secret(_INTERNAL_TOKEN_FILE, 24)
+
+
+def _controller_token_file():
+    """Resolved late so the tests can point ``VAR_DIR`` somewhere temporary."""
+    return paths.VAR_DIR / "controller-token"
+
+
+def controller_token() -> str:
+    """The secret inside the QR code shown on the TV.
+
+    It is a room secret rather than a personal one: everybody who scans the
+    code gets the same one, and it only ever unlocks the room-control buttons.
+    """
+    return _read_or_create_secret(_controller_token_file(), 18)
+
+
+def controller_fingerprint() -> str:
+    """A short, non-reversible stamp of the current pairing code.
+
+    Stored in the phone's session instead of the code itself, and re-checked on
+    every request. That is what makes "New code" mean something: rotating the
+    token changes this stamp, so every phone paired against the old one stops
+    being a controller — a session flag alone would have outlived it.
+    """
+    digest = hashlib.sha256(controller_token().encode("ascii", "ignore")).hexdigest()
+    return digest[:16]
+
+
+def rotate_controller_token() -> str:
+    """Issue a new pairing code, invalidating every phone paired so far."""
+    try:
+        _controller_token_file().unlink()
+    except OSError:
+        pass
+    token = controller_token()
+    log_event(log, logging.INFO, "web.controller_token_rotated")
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -173,11 +226,81 @@ def verify_pin(submitted: str) -> tuple[bool, str]:
     return False, "Incorrect PIN."
 
 
+def pair_controller(submitted: str) -> bool:
+    """Accept a scanned pairing code and remember the phone for next time."""
+    address = client_address()
+    if pin_guard.locked_out(address) > 0:
+        log_event(log, logging.WARNING, "web.controller_pairing_throttled",
+                  address=address)
+        return False
+
+    if not hmac.compare_digest(str(submitted or ""), controller_token()):
+        pin_guard.record_failure(address)
+        log_event(log, logging.WARNING, "web.controller_code_rejected", address=address)
+        return False
+
+    pin_guard.clear(address)
+    session[CONTROLLER_SESSION_KEY] = controller_fingerprint()
+    session.permanent = True
+
+    # A Raspberry Pi on a wall has no keyboard, and the first-run setup has to
+    # happen before there is a PIN to ask for. So by default the phone that
+    # scanned the room's own screen becomes that room's administrator.
+    config = current_app.config.get("ROOM_CONFIG")
+    full = config is None or config.bool_("CONTROLLER_FULL_ACCESS")
+    if config is not None and config.bool_("CONTROLLER_REQUIRE_PIN"):
+        full = False
+    if full:
+        session["admin"] = True
+
+    csrf_token()
+    log_event(log, logging.INFO, "web.controller_paired", address=address, full=full)
+    return True
+
+
+def controller_grant_expired() -> bool:
+    """True when this session's rights came from a code that has been replaced.
+
+    Pairing can hand out administrator access, so "New code" has to take that
+    back too — otherwise the button would revoke the small permission and leave
+    the large one standing.
+    """
+    paired = session.get(CONTROLLER_SESSION_KEY)
+    if not isinstance(paired, str) or not paired:
+        return False
+    return not hmac.compare_digest(paired, controller_fingerprint())
+
+
 def is_admin() -> bool:
     """True when this request may change things."""
     if is_local_request():
         return True
-    return bool(session.get("admin"))
+    if not session.get("admin"):
+        return False
+    # Admin rights that came from a pairing code die with that code. A PIN
+    # sign-in leaves no pairing stamp behind, so it is unaffected.
+    if controller_grant_expired():
+        session.pop("admin", None)
+        session.pop(CONTROLLER_SESSION_KEY, None)
+        return False
+    return True
+
+
+def is_controller() -> bool:
+    """True when this request may press the room-control buttons.
+
+    Admins (and the kiosk itself) always can; a paired phone can as well,
+    unless the room has been set to demand the PIN from everyone.
+    """
+    if is_admin():
+        return True
+    config = current_app.config.get("ROOM_CONFIG")
+    if config is not None and config.bool_("CONTROLLER_REQUIRE_PIN"):
+        return False
+    paired = session.get(CONTROLLER_SESSION_KEY)
+    if not isinstance(paired, str) or not paired:
+        return False
+    return hmac.compare_digest(paired, controller_fingerprint())
 
 
 def admin_needed() -> bool:
@@ -216,6 +339,29 @@ def require_admin(view: Callable[..., Any]) -> Callable[..., Any]:
                 )
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
+
+    return wrapper
+
+
+def require_controller(view: Callable[..., Any]) -> Callable[..., Any]:
+    """Allow the kiosk, an admin, or a phone that scanned the room's code."""
+
+    @wraps(view)
+    def wrapper(*args: Any, **kwargs: Any):
+        if is_controller():
+            return view(*args, **kwargs)
+        if wants_json():
+            return (
+                jsonify(
+                    {
+                        "ok": False,
+                        "error": "Scan the code on the TV to control this room.",
+                        "needs_pairing": True,
+                    }
+                ),
+                401,
+            )
+        return redirect(url_for("controller_locked"))
 
     return wrapper
 
@@ -267,13 +413,22 @@ def require_internal(view: Callable[..., Any]) -> Callable[..., Any]:
 # ---------------------------------------------------------------------------
 
 
+def lan_access_enabled(config) -> bool:
+    """True when phones on the room's network can reach this server at all."""
+    return bool(
+        config.bool_("ADMIN_LAN_ACCESS")
+        or (config.bool_("CONTROLLER_ENABLED") and config.bool_("CONTROLLER_LAN_ACCESS"))
+    )
+
+
 def effective_bind_host(config) -> str:
     """Where the server should listen.
 
-    Localhost unless the administrator has explicitly turned on LAN access,
-    which cannot be enabled without a PIN.
+    Localhost unless the administrator has explicitly opened the room up —
+    either for settings from a laptop (which needs a PIN), or for the phone
+    controller (which needs the QR code and can only press the room buttons).
     """
-    if config.bool_("ADMIN_LAN_ACCESS"):
+    if lan_access_enabled(config):
         configured = config.str_("DASHBOARD_HOST")
         # A specific address stays specific; the default widens to all interfaces.
         return "0.0.0.0" if configured in ("127.0.0.1", "localhost", "") else configured

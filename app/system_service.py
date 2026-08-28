@@ -40,6 +40,7 @@ MANAGED_UNITS = (
     "room-remote.service",
     "room-watchdog.timer",
     "room-watchdog.service",
+    "room-update.service",
 )
 
 

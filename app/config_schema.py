@@ -114,6 +114,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("airplay", "AirPlay screen sharing"),
     ("audio", "Poly conference bar"),
     ("remote", "Poly remote / controller"),
+    ("controller", "Room controller (phone)"),
     ("display", "Display & browser"),
     ("background", "Background & slideshow"),
     ("recovery", "Reliability & recovery"),
@@ -129,9 +130,13 @@ GROUP_HELP: dict[str, str] = {
     "airplay": "Wireless screen sharing from a Mac, iPhone or iPad.",
     "audio": "The USB conference bar used as camera, microphone and speaker.",
     "remote": "Optional physical remote / controller buttons.",
+    "controller": "The big-button page anyone in the room can open by scanning\n"
+    "the QR code on the TV. It joins, leaves, mutes and changes the volume — and\n"
+    "nothing else.",
     "display": "Chromium kiosk behaviour on the TV.",
     "background": "The wallpaper behind the dashboard. Upload your own photos "
-    "from the control panel and they rotate as a slideshow.",
+    "and videos from the control panel and they rotate as a slideshow; a video "
+    "plays all the way through before the next slide.",
     "recovery": "Self-healing. Leave these alone unless you have a reason.",
     "system": "Ports, logging and administrative access.",
 }
@@ -323,6 +328,19 @@ FIELDS: tuple[Field, ...] = (
         advanced=True,
     ),
     Field(
+        key="JOIN_REPEAT_GUARD_SECONDS",
+        type="float",
+        default=25.0,
+        minimum=0.0,
+        maximum=300.0,
+        group="meetings",
+        label="Do not press the same button twice within (seconds)",
+        help="A slow meeting page can look unchanged for several seconds after "
+        "Join is pressed. Without this guard the room presses it again, and "
+        "again, which looks like the meeting being opened several times over.",
+        advanced=True,
+    ),
+    Field(
         key="RETURN_HOME_MINUTES",
         type="float",
         default=2.0,
@@ -384,6 +402,59 @@ FIELDS: tuple[Field, ...] = (
         group="meetings",
         label="Join muted",
         help="Ask the meeting page to mute the room's microphone on entry.",
+        advanced=True,
+    ),
+    # -- Room controller ----------------------------------------------------
+    Field(
+        key="CONTROLLER_ENABLED",
+        type="bool",
+        default=True,
+        group="controller",
+        label="Phone controller",
+        help="A big-button page for whoever is in the room: join, leave, mute, "
+        "camera and volume. It is opened by scanning the code on the TV — no "
+        "app to install and no PIN to remember.",
+    ),
+    Field(
+        key="CONTROLLER_QR_ON_TV",
+        type="bool",
+        default=True,
+        group="controller",
+        label="Show the QR code on the TV",
+        help="A small code in the bottom-right corner of the room screen. Point "
+        "a phone camera at it to open the controller for this room.",
+    ),
+    Field(
+        key="CONTROLLER_LAN_ACCESS",
+        type="bool",
+        default=False,
+        group="controller",
+        label="Let phones on the room network open the controller",
+        help="Needed for the QR code to work when “Allow settings from other "
+        "computers on the network” is off. Nothing is reachable without the "
+        "code on the TV or the admin PIN.",
+        restart_units=("room-dashboard.service",),
+    ),
+    Field(
+        key="CONTROLLER_FULL_ACCESS",
+        type="bool",
+        default=True,
+        group="controller",
+        label="A scanned phone can do everything",
+        help="On, the QR code is this room's remote control: the room buttons, "
+        "settings, backgrounds, restarts, logs — so a keyboard never has to be "
+        "plugged into the Pi, not even for first-time setup. Off, a scanned "
+        "phone gets the room buttons only and anything else asks for the admin "
+        "PIN.",
+    ),
+    Field(
+        key="CONTROLLER_REQUIRE_PIN",
+        type="bool",
+        default=False,
+        group="controller",
+        label="Ask for the admin PIN on the controller too",
+        help="Turn this on for a room in a public space, where being able to see "
+        "the TV should not be enough to control it.",
         advanced=True,
     ),
     # -- AirPlay ------------------------------------------------------------
@@ -634,6 +705,20 @@ FIELDS: tuple[Field, ...] = (
         restart_units=("room-kiosk.service",),
     ),
     Field(
+        key="PERFORMANCE_PROFILE",
+        type="choice",
+        default="auto",
+        choices=("auto", "high", "balanced", "low"),
+        group="display",
+        label="Performance profile",
+        help="“auto” looks at the machine and picks: a mini-PC or NUC gets "
+        "“high” (GPU rasterisation and video decoding on, join timings "
+        "unpadded), a Pi 4 or 5 gets “balanced”, a Pi 3 gets “low”. Choose one "
+        "by hand to override the guess. It only ever supplies defaults — "
+        "anything you have set yourself still wins.",
+        restart_units=("room-dashboard.service", "room-kiosk.service"),
+    ),
+    Field(
         key="CHROMIUM_RENDER_MODE",
         type="choice",
         default="auto",
@@ -722,7 +807,17 @@ FIELDS: tuple[Field, ...] = (
         maximum=3600,
         group="background",
         label="Seconds per image",
-        help="How long each slideshow image stays on screen before it fades to the next.",
+        help="How long each slideshow image stays on screen before it fades to "
+        "the next. Videos ignore this and play to the end.",
+    ),
+    Field(
+        key="BACKGROUND_VIDEO_SOUND",
+        type="bool",
+        default=False,
+        group="background",
+        label="Play sound with background videos",
+        help="Off by default, and it should usually stay off: the wallpaper "
+        "talking over a meeting is worse than a silent clip.",
     ),
     Field(
         key="BACKGROUND_SHUFFLE",
@@ -829,6 +924,29 @@ FIELDS: tuple[Field, ...] = (
         label="Failed checks before rebooting",
         help="With a 1-minute watchdog, 10 means roughly ten minutes of being "
         "completely unresponsive.",
+        advanced=True,
+    ),
+    Field(
+        key="AUTO_UPDATE_ON_BOOT",
+        type="bool",
+        default=True,
+        group="recovery",
+        label="Update the room software when it boots",
+        help="Pulls the latest version from the repository this room was "
+        "installed from, before the dashboard starts. A room that cannot reach "
+        "the repository, or whose files have been edited on the Pi, simply "
+        "keeps the version it has — updating never stops the room starting.",
+        restart_units=(),
+    ),
+    Field(
+        key="AUTO_UPDATE_BRANCH",
+        type="str",
+        default="",
+        group="recovery",
+        label="Branch to update from",
+        help="Empty follows whichever branch the Pi is on. Only fast-forward "
+        "updates are taken, so a branch that has diverged is left alone.",
+        placeholder="main",
         advanced=True,
     ),
     Field(

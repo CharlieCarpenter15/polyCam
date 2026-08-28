@@ -30,6 +30,12 @@ def tiny_png() -> bytes:
     )
 
 
+def tiny_mp4() -> bytes:
+    """An MP4 file header, which is all the type check looks at."""
+    body = b"ftypisom" + b"\x00\x00\x02\x00" + b"isomiso2avc1mp41"
+    return len(body).to_bytes(4, "big") + body + b"\x00" * 512
+
+
 @pytest.fixture()
 def app(mock_config):
     from app.main import create_app
@@ -284,6 +290,61 @@ class TestBackgrounds:
     def test_only_our_own_images_are_served(self, client, name):
         assert client.get(f"/media/backgrounds/{name}").status_code in (301, 302, 404)
 
+    def test_a_video_can_be_uploaded_and_played_back(self, client, token):
+        response = client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_mp4()), "loop.mp4")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        assert response.status_code == 200, response.get_json()
+        uploaded = response.get_json()["image"]
+        assert uploaded["kind"] == "video"
+        assert uploaded["name"].endswith(".mp4")
+
+        served = client.get(uploaded["url"])
+        assert served.status_code == 200
+        assert served.headers["Content-Type"].startswith("video/")
+
+    def test_a_video_is_a_slide_but_never_a_css_background(self, client, token):
+        """Painting an .mp4 as a background-image would just blank the wall."""
+        client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_mp4()), "loop.mp4")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(tiny_png()), "wall.png")},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        backgrounds = client.get("/api/state").get_json()["backgrounds"]
+        kinds = [item["kind"] for item in backgrounds["media"]]
+        assert sorted(kinds) == ["image", "video"]
+        assert len(backgrounds["images"]) == 1
+        assert not any(url.endswith(".mp4") for url in backgrounds["images"])
+
+    @pytest.mark.parametrize(
+        "payload,name",
+        [
+            (b"\x00\x00\x00\x18ftypheic" + b"\x00" * 64, "photo.heic"),
+            (b"\x00\x00\x00\x18ftyp" + b"\x00" * 64, "nameless.mp4"),
+            (b"RIFF\x00\x00\x00\x00AVI ", "old.avi"),
+        ],
+    )
+    def test_containers_the_tv_cannot_play_are_refused(self, client, token, payload, name):
+        """Better a clear "no" than a slide that is black for 45 seconds."""
+        response = client.post(
+            "/api/backgrounds",
+            data={"image": (io.BytesIO(payload), name)},
+            content_type="multipart/form-data",
+            headers={"X-Room-Token": token},
+        )
+        assert response.status_code == 400
+        assert "video" in response.get_json()["error"].lower()
+
     def test_uploads_can_be_switched_off(self, client, token, mock_config):
         mock_config.update({"BACKGROUND_ALLOW_UPLOADS": False})
         response = client.post(
@@ -466,6 +527,241 @@ class TestSetupOverlay:
         assert 'id="setup-pin-row"' in body
 
 
+class TestRoomController:
+    """The phone controller: whoever can see the TV can press the room buttons.
+
+    The whole point of the QR code is that a visitor does not need the admin
+    PIN, so these tests are mostly about the *edges* of that trade: the code
+    must be required, it must be rate-limited, it must never reach anything
+    beyond the room buttons, and it must never leak to someone who merely
+    loaded the dashboard from the LAN.
+    """
+
+    PHONE = {"REMOTE_ADDR": "192.168.1.60"}
+
+    @staticmethod
+    def _code() -> str:
+        from app.web_security import controller_token
+
+        return controller_token()
+
+    @staticmethod
+    def _csrf(client, path: str, **kwargs) -> str:
+        body = client.get(path, **kwargs).get_data(as_text=True)
+        marker = 'data-csrf="'
+        start = body.index(marker) + len(marker)
+        return body[start : body.index('"', start)]
+
+    def _paired(self, app):
+        """A phone that has scanned the code, with its page token."""
+        phone = app.test_client()
+        response = phone.get(f"/c/{self._code()}", environ_overrides=self.PHONE)
+        assert response.status_code == 302, "a valid code should pair the phone"
+        return phone, self._csrf(phone, "/controller", environ_overrides=self.PHONE)
+
+    # -- pairing ---------------------------------------------------------
+    def test_the_kiosk_can_open_the_controller(self, client):
+        assert client.get("/controller").status_code == 200
+
+    def test_an_unpaired_phone_is_told_to_scan_the_code(self, client):
+        response = client.get("/controller", environ_overrides=self.PHONE)
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith("/controller/locked")
+
+        locked = client.get("/controller/locked", environ_overrides=self.PHONE)
+        assert locked.status_code == 403
+        assert "scan" in locked.get_data(as_text=True).lower()
+
+    def test_scanning_the_code_opens_the_controller(self, app):
+        phone, _ = self._paired(app)
+        assert phone.get("/controller", environ_overrides=self.PHONE).status_code == 200
+
+    def test_a_wrong_code_does_not_pair(self, client):
+        response = client.get("/c/not-the-code", environ_overrides={"REMOTE_ADDR": "192.168.1.61"})
+        assert response.headers["Location"].endswith("/controller/locked")
+        assert client.get(
+            "/api/controller/state", environ_overrides={"REMOTE_ADDR": "192.168.1.61"}
+        ).status_code == 401
+
+    def test_guessing_the_code_is_rate_limited(self, client):
+        from app.web_security import pin_guard
+
+        address = {"REMOTE_ADDR": "192.168.1.62"}
+        pin_guard.clear(address["REMOTE_ADDR"])
+        for _ in range(8):
+            client.get("/c/wrong", environ_overrides=address)
+        # Even the real code is refused while the client is cooling off.
+        response = client.get(f"/c/{self._code()}", environ_overrides=address)
+        assert response.headers["Location"].endswith("/controller/locked")
+        pin_guard.clear(address["REMOTE_ADDR"])
+
+    def test_a_new_code_unpairs_the_old_phones(self, app, client, token):
+        phone, _ = self._paired(app)
+        assert phone.get("/controller", environ_overrides=self.PHONE).status_code == 200
+
+        assert post(client, "/api/actions/controller-code", token).status_code == 200
+
+        response = phone.get("/api/controller/state", environ_overrides=self.PHONE)
+        assert response.status_code == 401
+        assert response.get_json()["needs_pairing"] is True
+
+    # -- what a paired phone may and may not do --------------------------
+    def test_the_state_has_what_the_controller_renders(self, app):
+        phone, _ = self._paired(app)
+        payload = phone.get("/api/controller/state", environ_overrides=self.PHONE).get_json()
+        for key in (
+            "mode", "room", "now", "current", "next", "upcoming", "active_meeting",
+            "join_available", "audio", "sharing", "network_ok", "calendar",
+        ):
+            assert key in payload, f"the controller needs {key}"
+        # The page uses this to decide whether to offer settings and repairs.
+        assert payload["is_admin"] is True
+
+    def test_the_room_buttons_work(self, app):
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/controller/action",
+            json={"action": "home"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 200 and response.get_json()["ok"] is True
+
+    def test_only_the_room_buttons_are_accepted(self, app):
+        phone, csrf = self._paired(app)
+        for action in ("restart", "reboot", "settings", ""):
+            response = phone.post(
+                "/api/controller/action",
+                json={"action": action},
+                headers={"X-Room-Token": csrf},
+                environ_overrides=self.PHONE,
+            )
+            assert response.status_code == 400, action
+
+    def test_an_action_still_needs_the_page_token(self, app):
+        phone, _ = self._paired(app)
+        response = phone.post(
+            "/api/controller/action", json={"action": "home"}, environ_overrides=self.PHONE
+        )
+        assert response.status_code == 403
+
+    @pytest.mark.parametrize(
+        "path", ["/api/settings", "/api/diagnostics", "/api/logs", "/settings"]
+    )
+    def test_scanning_the_code_hands_over_the_whole_room(self, app, path):
+        """The default: the code replaces the keyboard nobody wants to plug in."""
+        phone, _ = self._paired(app)
+        assert phone.get(path, environ_overrides=self.PHONE).status_code == 200, path
+
+    def test_a_scanned_phone_can_set_the_room_up_from_scratch(self, app, mock_config):
+        """First-run setup happens before any PIN exists, so it cannot need one."""
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/settings",
+            json={"ROOM_NAME": "Boardroom"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 200, response.get_json()
+        assert mock_config.str_("ROOM_NAME") == "Boardroom"
+
+    @pytest.mark.parametrize(
+        "path", ["/api/settings", "/api/diagnostics", "/api/logs", "/settings"]
+    )
+    def test_restricted_mode_keeps_a_phone_to_the_room_buttons(
+        self, app, mock_config, path
+    ):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
+        phone, _ = self._paired(app)
+        response = phone.get(path, environ_overrides=self.PHONE)
+        assert response.status_code in (302, 401), path
+
+    def test_restricted_mode_still_presses_the_room_buttons(self, app, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/controller/action",
+            json={"action": "home"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 200
+
+    def test_restricted_mode_cannot_restart_the_room(self, app, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
+        phone, csrf = self._paired(app)
+        response = phone.post(
+            "/api/actions/restart",
+            json={"target": "backend"},
+            headers={"X-Room-Token": csrf},
+            environ_overrides=self.PHONE,
+        )
+        assert response.status_code == 401
+
+    def test_the_room_can_demand_the_pin_as_well(self, app, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_REQUIRE_PIN": True})
+        phone = app.test_client()
+        response = phone.get(f"/c/{self._code()}", environ_overrides=self.PHONE)
+        assert "/login" in response.headers["Location"]
+        assert phone.get(
+            "/api/controller/state", environ_overrides=self.PHONE
+        ).status_code == 401
+
+    def test_the_controller_can_be_switched_off(self, client, mock_config):
+        mock_config.update({"CONTROLLER_ENABLED": False})
+        assert client.get("/controller").status_code == 404
+        assert client.get("/qr/controller.svg").status_code == 404
+
+    # -- the code on the TV ----------------------------------------------
+    def test_the_kiosk_is_given_a_scannable_code(self, client, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "ADMIN_LAN_ACCESS": True})
+        response = client.get("/qr/controller.svg")
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("image/svg+xml")
+        body = response.get_data(as_text=True)
+        assert "<svg" in body and "viewBox" in body
+        assert self._code() not in body, "the code is scanned, never written out"
+
+    def test_the_code_is_not_served_to_the_network(self, app, client, mock_config):
+        """The image *is* the secret: it has to be read off the room's screen.
+
+        A phone that has already scanned it is a different matter — it has the
+        code by definition — so the check is that a stranger cannot fetch it.
+        """
+        assert client.get(
+            "/qr/controller.svg", environ_overrides=self.PHONE
+        ).status_code == 404
+
+        mock_config.update({"ADMIN_PIN": "4242", "CONTROLLER_FULL_ACCESS": False})
+        phone, _ = self._paired(app)
+        assert phone.get(
+            "/qr/controller.svg", environ_overrides=self.PHONE
+        ).status_code == 404
+
+    def test_the_dashboard_tells_the_kiosk_where_the_controller_is(self, client, mock_config):
+        mock_config.update({"ADMIN_PIN": "4242", "ADMIN_LAN_ACCESS": True})
+        controller = client.get("/api/state").get_json()["controller"]
+        assert controller["enabled"] is True
+        assert controller["show_qr"] is True
+        assert controller["qr_url"] == "/qr/controller.svg"
+        assert self._code() in controller["url"]
+
+    def test_the_pairing_code_never_leaves_the_pi(self, client, mock_config):
+        """/api/state is deliberately readable from the LAN — the code is not."""
+        mock_config.update({"ADMIN_PIN": "4242", "ADMIN_LAN_ACCESS": True})
+        payload = client.get("/api/state", environ_overrides=self.PHONE).get_json()
+        assert "url" not in payload["controller"]
+        assert self._code() not in client.get(
+            "/api/state", environ_overrides=self.PHONE
+        ).get_data(as_text=True)
+
+    def test_the_qr_is_hidden_when_no_phone_could_reach_it(self, client):
+        """With the room closed to the network, a code would be a dead end."""
+        controller = client.get("/api/state").get_json()["controller"]
+        assert controller["reachable"] is False
+        assert controller["qr_url"] == ""
+
+
 class TestBinding:
     def test_the_server_stays_local_by_default(self, mock_config):
         from app.web_security import effective_bind_host
@@ -485,3 +781,16 @@ class TestBinding:
             {"ADMIN_PIN": "4242", "ADMIN_LAN_ACCESS": True, "DASHBOARD_HOST": "10.0.0.5"}
         )
         assert effective_bind_host(mock_config) == "10.0.0.5"
+
+    def test_the_controller_can_open_the_room_without_a_pin(self, mock_config):
+        """A room with no admin PIN can still hand out the phone controller."""
+        from app.web_security import effective_bind_host
+
+        mock_config.update({"CONTROLLER_LAN_ACCESS": True})
+        assert effective_bind_host(mock_config) == "0.0.0.0"
+
+    def test_switching_the_controller_off_closes_the_door_again(self, mock_config):
+        from app.web_security import effective_bind_host
+
+        mock_config.update({"CONTROLLER_LAN_ACCESS": True, "CONTROLLER_ENABLED": False})
+        assert effective_bind_host(mock_config) == "127.0.0.1"

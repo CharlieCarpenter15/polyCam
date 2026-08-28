@@ -80,7 +80,7 @@ class TestShellScripts:
 
 class TestSystemdUnits:
     def test_units_were_found(self):
-        assert len(UNIT_FILES) == 6, [p.name for p in UNIT_FILES]
+        assert len(UNIT_FILES) == 7, [p.name for p in UNIT_FILES]
 
     @pytest.mark.parametrize("unit", UNIT_FILES, ids=lambda p: p.name)
     def test_units_parse(self, unit):
@@ -108,13 +108,23 @@ class TestSystemdUnits:
             return  # created by the installer, not present in the repository
         assert Path(target).exists(), f"{unit.name} starts {target}, which is missing"
 
+    @staticmethod
+    def _is_oneshot(unit) -> bool:
+        parser = configparser.ConfigParser(strict=False)
+        parser.read(unit, encoding="utf-8")
+        return parser.get("Service", "Type", fallback="") == "oneshot"
+
     @pytest.mark.parametrize(
-        "unit",
-        [u for u in UNIT_FILES if u.suffix == ".service" and "watchdog" not in u.name],
-        ids=lambda p: p.name,
+        "unit", [u for u in UNIT_FILES if u.suffix == ".service"], ids=lambda p: p.name
     )
     def test_long_running_services_restart_forever(self, unit):
-        """systemd's default start limit would give up and leave the room dark."""
+        """systemd's default start limit would give up and leave the room dark.
+
+        One-shot units (the watchdog check, the boot-time update) are the
+        exception: they are *meant* to run once and exit.
+        """
+        if self._is_oneshot(unit):
+            pytest.skip("one-shot units run to completion rather than staying up")
         parser = configparser.ConfigParser(strict=False)
         parser.read(unit, encoding="utf-8")
         assert parser.get("Service", "Restart", fallback="") == "always", unit.name

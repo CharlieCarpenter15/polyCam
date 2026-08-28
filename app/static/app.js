@@ -27,8 +27,37 @@
   var joining = false;
   var toastTimer = null;
 
-  // Background slideshow
-  var slideshow = { images: [], index: -1, layer: 0, timer: null, seconds: 45 };
+  // Background slideshow. Slides are images or videos; see the slideshow
+  // section below for what each field is doing.
+  var slideshow = {
+    media: [],        // the slides being played, broken ones removed
+    raw: "",          // signature of the list the backend last sent
+    broken: {},       // urls that failed, so they are not retried every poll
+    index: -1,
+    layer: 0,         // which still layer is on top
+    timer: null,      // the dwell timer, images only
+    seconds: 45,
+    shuffle: false,
+    sound: false,
+    loading: false,   // an image is being fetched
+    loadingAt: 0,
+    playing: false,   // a video slide is on screen
+    forcedMute: false,  // this clip only plays with the sound off
+    guard: null,      // watchdog for the playing video
+    release: null,    // pending release of the video element
+    metadata: false,  // the playing video reported its duration
+    startedAt: 0,
+    lastTime: -1,
+    lastMoved: 0
+  };
+
+  // The QR codes: one small one in the corner, one large one on the first-run
+  // overlay. Each remembers the src it is showing and any src that would not
+  // load, so a missing image is not requested again every poll.
+  var cornerQr = { src: "", failed: "" };
+  var setupQr = { src: "", failed: "" };
+  var badgeShown = false;  // while it is up, the "Control panel:" hint stands down
+  var lastRemote = "";     // the remote-control event already announced
 
   var csrf = document.body.getAttribute("data-csrf") || "";
 
@@ -348,6 +377,7 @@
 
     var setup = !!payload.setup_required && !sharing;
     show($("overlay-setup"), setup);
+    renderSetupScan(payload, setup);
     if (!setup) return;
 
     setText("setup-url", payload.panel_url || "");
@@ -374,13 +404,205 @@
     setText("airplay-name", airplay.name || payload.room.name || "Meeting Room");
     show($("sharing"), !!display.show_instructions && airplay.enabled !== false);
 
+    // Two addresses in one corner is clutter, and the badge is the one people
+    // can act on, so the panel hint gives way while it is on screen.
     var hint = $("panel-hint");
-    var wanted = !!display.show_panel_url && !!payload.panel_url;
+    var wanted = !!display.show_panel_url && !!payload.panel_url && !badgeShown;
     show(hint, wanted);
     if (wanted) setText("panel-url", String(payload.panel_url).replace(/^https?:\/\//, ""));
   }
 
+  // ----------------------------------------------------- controller codes
+
+  var TURN_ON =
+    "turn on Settings \u2192 Room controller \u2192 " +
+    "\u201cLet phones on the room network open the controller\u201d";
+  var CONTROLLER_HINT = "To control the room from a phone, " + TURN_ON;
+  var SETUP_HINT = "To set the room up from a phone, " + TURN_ON;
+
+  // The corner badge is read from a metre or two; the setup overlay's code is
+  // read from across the room, so it asks for a bigger symbol.
+  var BADGE_SCALE = 4;
+  var SETUP_SCALE = 8;
+
+  function fingerprint(text) {
+    // A small non-cryptographic hash. It only has to change when the pairing
+    // URL changes; putting the URL itself in the query string would copy the
+    // room's secret into every request log and into the DOM.
+    var hash = 5381;
+    for (var i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash + text.charCodeAt(i)) & 0x7fffffff;
+    }
+    return hash.toString(36);
+  }
+
+  function controllerView(payload) {
+    // No controller block at all (an older backend, or a request from the LAN,
+    // which never gets the pairing address) means: show nothing.
+    var info = payload.controller || {};
+    var qrUrl = info.qr_url || "";
+    return {
+      qrUrl: qrUrl,
+      host: info.host || "",
+      // Something to scan.
+      scannable: !!(info.show_qr && info.reachable && qrUrl),
+      // On, but no phone can reach it: name the setting that fixes it.
+      blocked: !!(info.enabled && info.show_qr && !info.reachable),
+      stamp: fingerprint(String(info.url || ""))
+    };
+  }
+
+  function qrSource(view, scale) {
+    if (!view.qrUrl) return "";
+    return view.qrUrl + (view.qrUrl.indexOf("?") < 0 ? "?" : "&") +
+      "scale=" + scale + "&v=" + view.stamp;
+  }
+
+  function applyQr(record, id, src) {
+    // The code can be rotated from the panel, so the image has to follow it —
+    // but only when it actually changes, or the TV would refetch every poll.
+    var image = $(id);
+    if (!image || src === record.src) return;
+    record.src = src;
+    image.src = src;
+  }
+
+  function renderController(payload) {
+    var badge = $("controller-badge");
+    if (!badge) {
+      badgeShown = false;
+      return;
+    }
+
+    var view = controllerView(payload);
+    // The overlays carry their own instructions — and the setup overlay its
+    // own, larger code — so the corner stands down while either is up.
+    var covered = payload.mode === "screen-sharing" || !!payload.setup_required;
+    var src = qrSource(view, BADGE_SCALE);
+    var showQr = view.scannable && !covered && src !== cornerQr.failed;
+    var showHint = view.blocked && !covered;
+
+    badgeShown = showQr || showHint;
+    badge.className = "controller-badge" + (showHint ? " is-hint" : "");
+    show(badge, badgeShown);
+    show($("controller-qr-tile"), showQr);
+    setBodyClass("qr-badge", showQr);
+    setBodyClass("qr-hint", showHint);
+
+    if (showHint) {
+      setText("controller-caption", CONTROLLER_HINT);
+      setText("controller-host", "");
+      return;
+    }
+    if (!showQr) return;
+
+    setText("controller-caption", "Scan to control this room");
+    // The host address is safe to read out; the pairing code never is.
+    setText("controller-host", view.host || "");
+    applyQr(cornerQr, "controller-qr", src);
+  }
+
+  function renderSetupScan(payload, overlayUp) {
+    // The same source of truth as the corner badge, shown while the first-run
+    // overlay is up: scanning this is how a room gets set up without anyone
+    // plugging a keyboard into the Pi.
+    var block = $("setup-scan");
+    if (!block) return;
+
+    var view = controllerView(payload);
+    var src = qrSource(view, SETUP_SCALE);
+    var showQr = overlayUp && view.scannable && src !== setupQr.failed;
+    var showHint = overlayUp && view.blocked;
+
+    block.className = "setup-scan" + (showHint ? " is-hint" : "");
+    show(block, showQr || showHint);
+    show($("setup-qr-tile"), showQr);
+
+    if (showHint) {
+      setText("setup-scan-text", SETUP_HINT);
+      return;
+    }
+    if (!showQr) return;
+
+    setText("setup-scan-text", "Scan this to set the room up");
+    applyQr(setupQr, "setup-qr", src);
+  }
+
+  function watchQrImage(id, record, onFailure) {
+    var image = $(id);
+    if (!image) return;
+    image.addEventListener("error", function () {
+      record.failed = record.src;
+      onFailure();
+    });
+  }
+
+  function setBodyClass(name, wanted) {
+    if (wanted) document.body.classList.add(name);
+    else document.body.classList.remove(name);
+  }
+
+  function renderRemote(payload) {
+    // Added to /api/state for the hand-held remote and the phone controller,
+    // and null except for a few seconds after a button press. An older backend
+    // has no key at all, which is simply nothing to announce.
+    var remote = payload.remote;
+    if (!remote || !remote.detail) return;
+    var seen = String(remote.at || "") + "|" + String(remote.action || "") +
+      "|" + String(remote.source || "");
+    if (seen === lastRemote) return;
+    lastRemote = seen;
+    toast(remote.detail, remote.ok === false);
+  }
+
   // ------------------------------------------------------------- slideshow
+  //
+  // The wall plays two kinds of slide. An image is held for `seconds` and
+  // crossfaded into the next one. A video ignores `seconds` completely: it
+  // plays to its end and only then does the wall move on, because cutting a
+  // clip off part way through every 45 seconds is worse than an uneven
+  // rotation.
+  //
+  // Nothing in here may leave the screen stuck. An iPhone .mov is a perfectly
+  // valid file that Chromium on a Pi cannot decode, and it has to cost one
+  // skip rather than the whole slideshow — hence the watchdog and the list of
+  // slides that turned out not to play.
+
+  var VIDEO_METADATA_MS = 15000;  // nothing by now: it is never going to play
+  var VIDEO_STALL_MS = 20000;     // playing, but the clock stopped moving
+  var VIDEO_FADE_MS = 1700;       // the CSS fade, plus a little
+  var IMAGE_LOAD_MS = 30000;      // a fetch this old is not coming back
+
+  function slidesFrom(config) {
+    // "media" is the ordered list of slides, images and videos together. An
+    // older backend sends only "images", which are all stills, so the wall
+    // keeps working across an upgrade.
+    var slides = [];
+    var media = config.media || [];
+    var index;
+    for (index = 0; index < media.length; index++) {
+      if (media[index] && media[index].url) {
+        slides.push({
+          url: media[index].url,
+          video: media[index].kind === "video"
+        });
+      }
+    }
+    if (slides.length) return slides;
+    var images = config.images || [];
+    for (index = 0; index < images.length; index++) {
+      slides.push({ url: images[index], video: false });
+    }
+    return slides;
+  }
+
+  function signature(slides) {
+    var parts = [];
+    for (var i = 0; i < slides.length; i++) {
+      parts.push((slides[i].video ? "v:" : "i:") + slides[i].url);
+    }
+    return parts.join("|");
+  }
 
   function applyBackground(payload) {
     var config = payload.backgrounds || {};
@@ -388,8 +610,8 @@
     var shade = $("backdrop-shade");
     if (!backdrop) return;
 
-    var images = config.images || [];
     var mode = config.mode || "theme";
+    var slides = slidesFrom(config);
 
     if (mode === "solid") {
       stopSlideshow();
@@ -399,7 +621,21 @@
     }
     backdrop.style.background = "";
 
-    if (mode !== "slideshow" || !images.length) {
+    // A list the backend has changed deserves a clean start, including another
+    // go at anything that failed last time (it may have been re-uploaded).
+    var raw = signature(slides);
+    var restart = raw !== slideshow.raw;
+    if (restart) {
+      slideshow.raw = raw;
+      slideshow.broken = {};
+    }
+
+    var playable = [];
+    for (var i = 0; i < slides.length; i++) {
+      if (!slideshow.broken[slides[i].url]) playable.push(slides[i]);
+    }
+
+    if (mode !== "slideshow" || !playable.length) {
       stopSlideshow();
       backdrop.classList.remove("has-image");
       return;
@@ -412,67 +648,266 @@
         "rgba(0,0,0," + (dim * 0.7).toFixed(2) + ") 45%, rgba(0,0,0," + Math.min(0.95, dim + 0.2).toFixed(2) + "))";
     }
     var blur = Math.max(0, Math.min(40, Number(config.blur) || 0));
-    var layers = [$("backdrop-a"), $("backdrop-b")];
-    for (var i = 0; i < layers.length; i++) {
-      if (layers[i]) layers[i].style.filter = blur ? "blur(" + blur + "px)" : "";
+    var layers = [$("backdrop-a"), $("backdrop-b"), $("backdrop-video")];
+    for (var layer = 0; layer < layers.length; layer++) {
+      if (layers[layer]) layers[layer].style.filter = blur ? "blur(" + blur + "px)" : "";
     }
 
-    var changed = images.join("|") !== slideshow.images.join("|");
     slideshow.seconds = Math.max(5, Number(config.seconds) || 45);
     slideshow.shuffle = !!config.shuffle;
+    slideshow.sound = !!config.video_sound;
 
-    if (changed) {
-      slideshow.images = images.slice();
-      slideshow.index = -1;
-      backdrop.classList.add("has-image");
-      nextSlide();
-    } else {
-      backdrop.classList.add("has-image");
+    // The sound setting can be changed from the panel part way through a clip
+    // — unless this clip is only playing because the sound was turned off, in
+    // which case un-muting it would hand it back to the browser to pause.
+    var video = $("backdrop-video");
+    if (video && slideshow.playing && !slideshow.forcedMute) {
+      video.muted = !slideshow.sound;
     }
-    startSlideshow();
+
+    backdrop.classList.add("has-image");
+    if (restart || signature(playable) !== signature(slideshow.media)) {
+      slideshow.media = playable;
+      slideshow.index = -1;
+      nextSlide();
+      return;
+    }
+    keepRunning();
   }
 
-  function startSlideshow() {
-    if (slideshow.timer) return;
-    if (slideshow.images.length < 2) return;
-    slideshow.timer = setInterval(nextSlide, slideshow.seconds * 1000);
+  function clearDwell() {
+    if (slideshow.timer) {
+      clearTimeout(slideshow.timer);
+      slideshow.timer = null;
+    }
+  }
+
+  function clearWatchdog() {
+    if (slideshow.guard) {
+      clearInterval(slideshow.guard);
+      slideshow.guard = null;
+    }
+  }
+
+  function armDwell() {
+    clearDwell();
+    if (slideshow.media.length < 2) return;  // a single still never rotates
+    slideshow.timer = setTimeout(nextSlide, slideshow.seconds * 1000);
+  }
+
+  function keepRunning() {
+    // A poll must never disturb what is on screen: a video is running its own
+    // show, and an image still loading will arm its own timer when it lands.
+    // This only picks the wall back up if it has somehow stopped.
+    if (slideshow.playing || slideshow.timer) return;
+    if (slideshow.loading && Date.now() - slideshow.loadingAt < IMAGE_LOAD_MS) return;
+    if (slideshow.media.length < 2) return;
+    nextSlide();
   }
 
   function stopSlideshow() {
-    if (slideshow.timer) { clearInterval(slideshow.timer); slideshow.timer = null; }
+    clearDwell();
+    releaseVideo();
   }
 
   function nextSlide() {
-    var images = slideshow.images;
-    if (!images.length) return;
+    clearDwell();
+    var slides = slideshow.media;
+    if (!slides.length) return;
 
     var next;
-    if (slideshow.shuffle && images.length > 2) {
-      do { next = Math.floor(Math.random() * images.length); }
+    if (slideshow.shuffle && slides.length > 2) {
+      do { next = Math.floor(Math.random() * slides.length); }
       while (next === slideshow.index);
     } else {
-      next = (slideshow.index + 1) % images.length;
+      next = (slideshow.index + 1) % slides.length;
     }
     slideshow.index = next;
 
+    if (slides[next].video) showVideoSlide(slides[next]);
+    else showImageSlide(slides[next]);
+  }
+
+  function dropSlide(url) {
+    // A slide that will not play is set aside until the backend's list changes
+    // again, so the wall is not spending 15 seconds on it every time round.
+    slideshow.broken[url] = true;
+    var kept = [];
+    for (var i = 0; i < slideshow.media.length; i++) {
+      if (slideshow.media[i].url !== url) kept.push(slideshow.media[i]);
+    }
+    slideshow.media = kept;
+    slideshow.index = -1;
+    if (!kept.length) {
+      stopSlideshow();
+      var backdrop = $("backdrop");
+      if (backdrop) backdrop.classList.remove("has-image");  // back to the gradient
+      return;
+    }
+    nextSlide();
+  }
+
+  // -- still images ----------------------------------------------------
+
+  function showImageSlide(slide) {
+    releaseVideo();
     var target = slideshow.layer === 0 ? $("backdrop-b") : $("backdrop-a");
     var current = slideshow.layer === 0 ? $("backdrop-a") : $("backdrop-b");
     if (!target) return;
 
+    var url = slide.url;
+    slideshow.loading = true;
+    slideshow.loadingAt = Date.now();
+
     // Preload so the crossfade never shows a blank frame.
     var image = new Image();
     image.onload = function () {
-      target.style.backgroundImage = 'url("' + images[next] + '")';
+      slideshow.loading = false;
+      target.style.backgroundImage = 'url("' + url + '")';
       target.classList.add("visible");
       if (current) current.classList.remove("visible");
       slideshow.layer = slideshow.layer === 0 ? 1 : 0;
+      armDwell();  // the clock starts once the picture is actually up
     };
     image.onerror = function () {
-      // A deleted image: drop it and try the next one.
-      slideshow.images = slideshow.images.filter(function (url) { return url !== images[next]; });
-      if (slideshow.images.length) nextSlide();
+      slideshow.loading = false;
+      dropSlide(url);  // a deleted image: move on
     };
-    image.src = images[next];
+    image.src = url;
+  }
+
+  // -- videos ----------------------------------------------------------
+
+  function showVideoSlide(slide) {
+    var video = $("backdrop-video");
+    if (!video) {
+      dropSlide(slide.url);
+      return;
+    }
+    if (slideshow.release) {
+      clearTimeout(slideshow.release);  // it is being reused, not released
+      slideshow.release = null;
+    }
+
+    slideshow.playing = true;
+    slideshow.loading = false;
+    slideshow.forcedMute = false;
+    slideshow.metadata = false;
+    slideshow.startedAt = Date.now();
+    slideshow.lastTime = -1;
+    slideshow.lastMoved = Date.now();
+
+    // One clip and nothing else loops. Restarting it is better than cutting it
+    // off every 45 seconds, and far better than a black screen in between.
+    video.loop = slideshow.media.length === 1;
+    video.setAttribute("src", slide.url);
+    video.load();
+    video.classList.add("visible");
+    playVideo(video, !slideshow.sound);
+
+    clearWatchdog();
+    slideshow.guard = setInterval(watchVideo, 2000);
+  }
+
+  function playVideo(video, muted) {
+    video.muted = muted;
+    var started;
+    try {
+      started = video.play();
+    } catch (error) {
+      skipVideo();
+      return;
+    }
+    if (!started || !started.then) return;
+    started.catch(function () {
+      // Sound is the usual reason a browser refuses to start. Try again
+      // silently rather than leaving a frozen frame on the wall.
+      if (!muted) {
+        slideshow.forcedMute = true;
+        playVideo(video, true);
+        return;
+      }
+      skipVideo();
+    });
+  }
+
+  function watchVideo() {
+    var video = $("backdrop-video");
+    if (!video || !slideshow.playing) {
+      clearWatchdog();
+      return;
+    }
+    var now = Date.now();
+    if (!slideshow.metadata) {
+      // A file Chromium cannot decode often simply says nothing at all.
+      if (now - slideshow.startedAt > VIDEO_METADATA_MS) skipVideo();
+      return;
+    }
+    if (video.currentTime !== slideshow.lastTime) {
+      slideshow.lastTime = video.currentTime;
+      slideshow.lastMoved = now;
+      return;
+    }
+    // Nothing here ever pauses a slide, so a clip whose clock has stopped is
+    // stuck whether it calls itself paused or not — a browser that quietly
+    // paused it is exactly the frozen frame this watchdog is for.
+    if (now - slideshow.lastMoved > VIDEO_STALL_MS) skipVideo();
+  }
+
+  function endVideo() {
+    if (!slideshow.playing) return;
+    slideshow.playing = false;
+    clearWatchdog();
+    nextSlide();
+  }
+
+  function skipVideo() {
+    if (!slideshow.playing) return;
+    var slide = slideshow.media[slideshow.index];
+    // It never even reported a duration, so it is not a clip this Pi can play:
+    // set it aside. One that fails after playing gets another turn later.
+    var hopeless = !slideshow.metadata && slide;
+    slideshow.playing = false;
+    clearWatchdog();
+    if (hopeless) dropSlide(slide.url);
+    else nextSlide();
+  }
+
+  function releaseVideo() {
+    var video = $("backdrop-video");
+    slideshow.playing = false;
+    clearWatchdog();
+    if (!video) return;
+    video.classList.remove("visible");
+    if (!video.getAttribute("src")) return;
+    try {
+      video.pause();
+    } catch (error) {
+      // Nothing was playing; the release below is what matters.
+    }
+    if (slideshow.release) clearTimeout(slideshow.release);
+    // Let it fade out before the frame goes, then hand the decoder back: a Pi
+    // should not be holding one for a video nobody is watching.
+    slideshow.release = setTimeout(function () {
+      slideshow.release = null;
+      video.removeAttribute("src");
+      video.load();
+    }, VIDEO_FADE_MS);
+  }
+
+  function watchVideoLayer() {
+    var video = $("backdrop-video");
+    if (!video) return;
+    // Every one of these is a no-op unless a video slide is actually on
+    // screen, so releasing the element cannot set the wall off again.
+    video.addEventListener("loadedmetadata", function () {
+      slideshow.metadata = true;
+    });
+    video.addEventListener("ended", function () {
+      if (!video.loop) endVideo();
+    });
+    video.addEventListener("error", skipVideo);
+    video.addEventListener("stalled", skipVideo);
   }
 
   // ----------------------------------------------------------------- render
@@ -492,7 +927,9 @@
     renderBanner(payload);
     renderIndicators(payload);
     renderOverlays(payload);
+    renderController(payload);  // before the footer: it decides the panel hint
     renderFooter(payload);
+    renderRemote(payload);
     applyBackground(payload);
     tickClock();
   }
@@ -511,7 +948,10 @@
     fetchJson("/api/state")
       .then(function (payload) {
         consecutiveFailures = 0;
-        pollDelay = POLL_MS;
+        // The backend knows what kind of machine this is and how often it can
+        // afford to be asked. Anything silly is ignored.
+        var wanted = payload && payload.display && Number(payload.display.poll_ms);
+        pollDelay = (wanted >= 1000 && wanted <= POLL_MS_MAX) ? wanted : POLL_MS;
         if (payload && payload.now) {
           var serverTime = new Date(payload.now).getTime();
           if (!isNaN(serverTime)) {
@@ -593,6 +1033,18 @@
       // So the Poly remote's OK/Enter key works on the focused button too.
       button.setAttribute("tabindex", "0");
     }
+    watchVideoLayer();
+
+    // The /qr route 404s the moment the controller is switched off, and a
+    // broken-image icon on the room TV is worse than no code at all.
+    watchQrImage("controller-qr", cornerQr, function () {
+      show($("controller-badge"), false);
+      setBodyClass("qr-badge", false);
+    });
+    watchQrImage("setup-qr", setupQr, function () {
+      show($("setup-scan"), false);
+    });
+
     setInterval(tickClock, CLOCK_MS);
     tickClock();
     poll();

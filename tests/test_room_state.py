@@ -9,7 +9,7 @@ import pytest
 from app.airplay_service import AirPlayService
 from app.browser_service import BrowserService
 from app.calendar_service import CalendarService
-from app.meeting_service import MeetingService
+from app.meeting_service import REMOTE_ACTION_TTL_SECONDS, MeetingService
 from app.models import MODE_HOME, MODE_MEETING, MODE_OFFLINE, MODE_SHARING, Meeting
 from app.poly_service import PolyService
 from app.system_service import SystemService
@@ -24,6 +24,7 @@ class FakeBrowser:
         self.left = 0
         self.alive = True
         self.retried = 0
+        self.fronted = 0
         self.fail_open = False
 
     def open_meeting(self, meeting, *, reason=""):
@@ -41,6 +42,7 @@ class FakeBrowser:
         return self.go_home(reason=reason)
 
     def bring_to_front(self):
+        self.fronted += 1
         return True
 
     def retry_join(self):
@@ -371,3 +373,124 @@ class TestDashboardPayload:
         payload = room["room"].dashboard_payload()
         assert payload["room"]["available"] is False
         assert payload["current"]["id"] == "now"
+
+
+class TestJoiningIsIdempotent:
+    """Every JOIN button in the room ends up in open_meeting.
+
+    Pressing JOIN on the TV, then on a phone, then on the remote used to
+    re-navigate each time, reloading the meeting page in the middle of the
+    sign-in — which is what "it repeats logging into the meeting" looks like
+    from a chair in the room.
+    """
+
+    def test_a_second_join_for_the_same_meeting_does_not_navigate_again(self, room):
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("twice", now + timedelta(minutes=1))
+        set_meetings(room["calendar"], [meeting])
+
+        assert room["room"].open_meeting(meeting, manual=True) is True
+        assert room["room"].open_meeting(meeting, manual=True) is True
+        assert room["browser"].opened == ["twice"], "the page must not be reloaded"
+
+    def test_the_second_press_still_brings_the_meeting_forward(self, room):
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("front", now + timedelta(minutes=1))
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+        before = room["browser"].fronted
+        room["room"].open_meeting(meeting, manual=True)
+        assert room["browser"].fronted > before
+
+    def test_a_manual_join_racing_the_scheduled_open_only_navigates_once(self, room):
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("auto", now + timedelta(seconds=10))])
+        assert room["room"].tick() == MODE_MEETING          # the scheduled open
+        ok, _ = room["room"].join_meeting_id("auto")        # someone presses JOIN
+        assert ok and room["browser"].opened == ["auto"]
+
+    def test_a_different_meeting_still_opens(self, room):
+        now = datetime.now(timezone.utc)
+        first = teams_meeting("one", now + timedelta(minutes=1))
+        second = teams_meeting("two", now + timedelta(minutes=2))
+        set_meetings(room["calendar"], [first, second])
+        room["room"].open_meeting(first, manual=True)
+        room["room"].open_meeting(second, manual=True)
+        assert room["browser"].opened == ["one", "two"]
+
+    def test_the_meeting_opens_again_once_the_window_has_passed(self, room):
+        """After the automation has had its go, JOIN means "really try again"."""
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("stale", now - timedelta(minutes=1), minutes=60)
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+
+        active = room["room"].state().active
+        active.opened_at = active.opened_at - timedelta(minutes=10)
+        room["room"].open_meeting(meeting, manual=True)
+        assert room["browser"].opened == ["stale", "stale"]
+
+    def test_retrying_the_automation_never_navigates(self, room):
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("retry", now + timedelta(minutes=1))
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+        assert room["room"].retry_join_automation() is True
+        assert room["browser"].retried == 1
+        assert room["browser"].opened == ["retry"]
+
+
+class TestLastRemoteAction:
+    """What the TV and the phone controller show as a brief confirmation."""
+
+    def test_an_action_is_recorded_in_the_shape_the_ui_expects(self, room):
+        room["room"].dispatch_action("home")
+        remote = room["room"].dashboard_payload()["remote"]
+        assert set(remote) == {"action", "detail", "ok", "at", "source"}
+        assert remote["action"] == "home"
+        assert remote["detail"] == "Showing the room dashboard"
+        assert remote["ok"] is True
+        assert remote["source"] == "remote"
+        datetime.fromisoformat(str(remote["at"]))  # ISO 8601, and parseable
+
+    def test_nothing_is_shown_before_anything_is_pressed(self, room):
+        assert room["room"].dashboard_payload()["remote"] is None
+
+    def test_a_stale_action_disappears(self, room):
+        """It is a confirmation, not a history: an old one is just wrong."""
+        room["room"].dispatch_action("home")
+        recent = room["room"]._last_remote
+        recent.at = recent.at - timedelta(seconds=REMOTE_ACTION_TTL_SECONDS + 1)
+        assert room["room"].dashboard_payload()["remote"] is None
+
+    def test_the_source_is_remembered(self, room):
+        room["room"].dispatch_action("home", source="controller")
+        assert room["room"].dashboard_payload()["remote"]["source"] == "controller"
+
+    def test_it_is_still_callable_with_one_argument(self, room):
+        assert room["room"].dispatch_action("home")["ok"] is True
+
+    def test_each_action_explains_itself(self, room):
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("m", now + timedelta(minutes=5))])
+
+        joined = room["room"].dispatch_action("join")
+        assert joined["detail"] == "Joining Meeting m"
+
+        muted = room["room"].dispatch_action("mute")
+        assert muted["detail"] in ("Microphone muted", "Microphone on")
+
+        volume = room["room"].dispatch_action("volume_up")
+        assert volume["detail"] == f"Volume {volume['volume']}%"
+
+        camera = room["room"].dispatch_action("camera")
+        assert camera["detail"] == "Camera turned off"
+
+        assert room["room"].dispatch_action("hangup")["detail"] == "Left the meeting"
+        assert room["room"].dispatch_action("home")["detail"] == "Showing the room dashboard"
+
+    def test_a_failed_action_is_recorded_as_a_failure(self, room):
+        result = room["room"].dispatch_action("self_destruct")
+        remote = room["room"].dashboard_payload()["remote"]
+        assert result["ok"] is False
+        assert remote["ok"] is False and "Unknown action" in remote["detail"]

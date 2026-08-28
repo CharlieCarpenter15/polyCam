@@ -311,6 +311,23 @@ body.admin {
 
 .btn-row { display: flex; flex-wrap: wrap; gap: 10px; }
 
+/* -------------------------------------------------------- room controller */
+
+.qr-row { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+
+.qr {
+  flex: 0 0 auto;
+  width: 160px;
+  height: 160px;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  /* The code is dark on white and stays that way in the dark theme: a phone
+     camera will not read a light-on-dark symbol. */
+  background: #fff;
+}
+
+.qr-text { flex: 1 1 240px; min-width: 0; }
+
 /* ------------------------------------------------------------------ fields */
 
 .field { margin-bottom: 18px; }
@@ -488,6 +505,45 @@ input[type="range"] { width: 100%; height: var(--tap); accent-color: var(--accen
   overflow: hidden;
   background: var(--surface-3) center/cover no-repeat;
   border: 1px solid var(--border);
+}
+
+/* A video tile draws its own first frame, so the list says which clip is which
+   rather than showing a row of identical black squares. */
+.thumb-video-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+
+.thumb-badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 2px;
+}
+
+.thumb-size {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .thumb-remove {

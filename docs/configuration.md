@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 79 options. All have working defaults; a fresh install
+There are 89 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -45,6 +45,7 @@ needs only a calendar link.
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join automatically. Best effort. Teams, Meet and Zoom change their web pages without notice, so if this fails the big JOIN button on the dashboard always works. |
 | `JOIN_SETTLE_SECONDS` | `0.0` | Wait before pressing anything (seconds). 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower hardware: pressing buttons on a page that has not finished drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40. (min 0, max 120) _Advanced._ |
 | `AUTO_JOIN_TIMEOUT_SECONDS` | `90` | Give up on auto-join after (seconds). (min 10, max 600) _Advanced._ |
+| `JOIN_REPEAT_GUARD_SECONDS` | `25.0` | Do not press the same button twice within (seconds). A slow meeting page can look unchanged for several seconds after Join is pressed. Without this guard the room presses it again, and again, which looks like the meeting being opened several times over. (min 0, max 300) _Advanced._ |
 | `RETURN_HOME_MINUTES` | `2.0` | Return to dashboard after (minutes). Grace period after a meeting's scheduled end before the TV goes back to the room screen. (min 0, max 120) |
 | `MAX_MEETING_MINUTES` | `240` | Hard limit on a meeting screen (minutes). Safety net: the appliance never stays on a meeting page longer than this, even if the calendar goes strange. (min 10, max 1440) _Advanced._ |
 | `JOIN_BUTTON_TEXTS` | `Continue on this browser, Use the web app instead, Continue in this browser … (+7)` | Buttons the auto-join may press. One per line, matched case-insensitively against on-screen button text. Update this list if a provider renames a button — no code change needed. _Advanced._ |
@@ -88,6 +89,16 @@ needs only a calendar link.
 | `POLY_HOME_KEY` | `KEY_HOME` | Home button. Forces the TV back to the room dashboard. Restarts: room-remote. |
 | `POLY_VOLUME_STEP` | `5` | Volume step (%). (min 1, max 25) _Advanced._ Restarts: room-remote. |
 
+## Room controller (phone)
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `CONTROLLER_ENABLED` | `true` | Phone controller. A big-button page for whoever is in the room: join, leave, mute, camera and volume. It is opened by scanning the code on the TV — no app to install and no PIN to remember. |
+| `CONTROLLER_QR_ON_TV` | `true` | Show the QR code on the TV. A small code in the bottom-right corner of the room screen. Point a phone camera at it to open the controller for this room. |
+| `CONTROLLER_LAN_ACCESS` | `false` | Let phones on the room network open the controller. Needed for the QR code to work when “Allow settings from other computers on the network” is off. Nothing is reachable without the code on the TV or the admin PIN. Restarts: room-dashboard. |
+| `CONTROLLER_FULL_ACCESS` | `true` | A scanned phone can do everything. On, the QR code is this room's remote control: the room buttons, settings, backgrounds, restarts, logs — so a keyboard never has to be plugged into the Pi, not even for first-time setup. Off, a scanned phone gets the room buttons only and anything else asks for the admin PIN. |
+| `CONTROLLER_REQUIRE_PIN` | `false` | Ask for the admin PIN on the controller too. Turn this on for a room in a public space, where being able to see the TV should not be enough to control it. _Advanced._ |
+
 ## Display & browser
 
 | Option | Default | What it does |
@@ -95,6 +106,7 @@ needs only a calendar link.
 | `KIOSK_ENABLED` | `true` | Run the Chromium kiosk. Turn off only when developing on a normal computer. Restarts: room-kiosk. |
 | `CHROMIUM_BINARY` | `auto` | Chromium binary. “auto” searches for chromium-browser, chromium then google-chrome. _Advanced._ Restarts: room-kiosk. |
 | `CHROMIUM_DEBUG_PORT` | `9222` | Chromium debug port (localhost only). Used by the appliance to drive the browser. Never exposed off the Pi. (min 1024, max 65535) _Advanced._ Restarts: room-kiosk. |
+| `PERFORMANCE_PROFILE` | `auto` | Performance profile. “auto” looks at the machine and picks: a mini-PC or NUC gets “high” (GPU rasterisation and video decoding on, join timings unpadded), a Pi 4 or 5 gets “balanced”, a Pi 3 gets “low”. Choose one by hand to override the guess. It only ever supplies defaults — anything you have set yourself still wins. One of: auto, high, balanced, low. Restarts: room-dashboard, room-kiosk. |
 | `CHROMIUM_RENDER_MODE` | `auto` | How Chromium draws to the TV. Fix for a blank or white screen. “auto” detects Wayland (the default on Raspberry Pi OS Bookworm). Try “wayland”, then “x11”, then “software” — software always renders but without GPU acceleration. One of: auto, wayland, x11, software. Restarts: room-kiosk. |
 | `CHROMIUM_EXTRA_ARGS` | empty | Extra Chromium arguments. _Advanced._ Restarts: room-kiosk. |
 | `HIDE_CURSOR` | `true` | Hide the mouse pointer. Restarts: room-kiosk. |
@@ -109,7 +121,8 @@ needs only a calendar link.
 | Option | Default | What it does |
 | --- | --- | --- |
 | `BACKGROUND_MODE` | `theme` | Background. “theme” is the built-in gradient. “slideshow” rotates through the images you upload in the control panel. “solid” is a single colour. One of: theme, slideshow, solid. |
-| `BACKGROUND_SLIDESHOW_SECONDS` | `45` | Seconds per image. How long each slideshow image stays on screen before it fades to the next. (min 5, max 3600) |
+| `BACKGROUND_SLIDESHOW_SECONDS` | `45` | Seconds per image. How long each slideshow image stays on screen before it fades to the next. Videos ignore this and play to the end. (min 5, max 3600) |
+| `BACKGROUND_VIDEO_SOUND` | `false` | Play sound with background videos. Off by default, and it should usually stay off: the wallpaper talking over a meeting is worse than a silent clip. |
 | `BACKGROUND_SHUFFLE` | `true` | Shuffle images. Off plays them in filename order. |
 | `BACKGROUND_DIM_PERCENT` | `55` | Darken images by (%). Keeps the time and meeting text readable over a bright photo. Raise it if the text is hard to read from across the room. (min 0, max 95) |
 | `BACKGROUND_BLUR_PIXELS` | `0` | Blur images by (pixels). A little blur makes busy photos easier to read text over. (min 0, max 40) |
@@ -126,6 +139,8 @@ needs only a calendar link.
 | `WATCHDOG_ENABLED` | `true` | External watchdog. A tiny timer outside the app checks the appliance every minute and restarts anything that has stopped answering. Restarts: room-watchdog. |
 | `WATCHDOG_REBOOT_ENABLED` | `true` | Reboot as a last resort. If the appliance cannot be revived by restarting services, reboot the Pi. Rate-limited to once an hour. |
 | `WATCHDOG_REBOOT_AFTER_FAILURES` | `10` | Failed checks before rebooting. With a 1-minute watchdog, 10 means roughly ten minutes of being completely unresponsive. (min 3, max 120) _Advanced._ |
+| `AUTO_UPDATE_ON_BOOT` | `true` | Update the room software when it boots. Pulls the latest version from the repository this room was installed from, before the dashboard starts. A room that cannot reach the repository, or whose files have been edited on the Pi, simply keeps the version it has — updating never stops the room starting. |
+| `AUTO_UPDATE_BRANCH` | empty | Branch to update from. Empty follows whichever branch the Pi is on. Only fast-forward updates are taken, so a branch that has diverged is left alone. _Advanced._ |
 | `DAILY_RESTART_TIME` | empty | Daily quiet-hours restart. Optional HH:MM (24-hour) at which the room software restarts itself while nobody is around, e.g. 04:30. Empty disables it. |
 
 ## System & access

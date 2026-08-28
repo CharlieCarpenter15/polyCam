@@ -86,6 +86,11 @@ JOIN_SETTLE_SECONDS: 0.0
 
 AUTO_JOIN_TIMEOUT_SECONDS: 90
 
+# A slow meeting page can look unchanged for several seconds after Join is
+# pressed. Without this guard the room presses it again, and again, which
+# looks like the meeting being opened several times over.
+JOIN_REPEAT_GUARD_SECONDS: 25.0
+
 # Grace period after a meeting's scheduled end before the TV goes back to
 # the room screen.
 RETURN_HOME_MINUTES: 2.0
@@ -204,6 +209,36 @@ POLY_HOME_KEY: KEY_HOME
 POLY_VOLUME_STEP: 5
 
 # ----------------------------------------------------------------------
+# Room controller (phone)
+#   The big-button page anyone in the room can open by scanning the QR
+#   code on the TV. It joins, leaves, mutes and changes the volume — and
+#   nothing else.
+# ----------------------------------------------------------------------
+# A big-button page for whoever is in the room: join, leave, mute, camera
+# and volume. It is opened by scanning the code on the TV — no app to
+# install and no PIN to remember.
+CONTROLLER_ENABLED: true
+
+# A small code in the bottom-right corner of the room screen. Point a
+# phone camera at it to open the controller for this room.
+CONTROLLER_QR_ON_TV: true
+
+# Needed for the QR code to work when “Allow settings from other computers
+# on the network” is off. Nothing is reachable without the code on the TV
+# or the admin PIN.
+CONTROLLER_LAN_ACCESS: false
+
+# On, the QR code is this room's remote control: the room buttons,
+# settings, backgrounds, restarts, logs — so a keyboard never has to be
+# plugged into the Pi, not even for first-time setup. Off, a scanned phone
+# gets the room buttons only and anything else asks for the admin PIN.
+CONTROLLER_FULL_ACCESS: true
+
+# Turn this on for a room in a public space, where being able to see the
+# TV should not be enough to control it.
+CONTROLLER_REQUIRE_PIN: false
+
+# ----------------------------------------------------------------------
 # Display & browser
 #   Chromium kiosk behaviour on the TV.
 # ----------------------------------------------------------------------
@@ -215,6 +250,14 @@ CHROMIUM_BINARY: auto
 
 # Used by the appliance to drive the browser. Never exposed off the Pi.
 CHROMIUM_DEBUG_PORT: 9222
+
+# “auto” looks at the machine and picks: a mini-PC or NUC gets “high” (GPU
+# rasterisation and video decoding on, join timings unpadded), a Pi 4 or 5
+# gets “balanced”, a Pi 3 gets “low”. Choose one by hand to override the
+# guess. It only ever supplies defaults — anything you have set yourself
+# still wins.
+# options: auto, high, balanced, low
+PERFORMANCE_PROFILE: auto
 
 # Fix for a blank or white screen. “auto” detects Wayland (the default on
 # Raspberry Pi OS Bookworm). Try “wayland”, then “x11”, then “software” —
@@ -242,8 +285,9 @@ SHOW_STATUS_INDICATORS: true
 
 # ----------------------------------------------------------------------
 # Background & slideshow
-#   The wallpaper behind the dashboard. Upload your own photos from the
-#   control panel and they rotate as a slideshow.
+#   The wallpaper behind the dashboard. Upload your own photos and
+#   videos from the control panel and they rotate as a slideshow; a
+#   video plays all the way through before the next slide.
 # ----------------------------------------------------------------------
 # “theme” is the built-in gradient. “slideshow” rotates through the images
 # you upload in the control panel. “solid” is a single colour.
@@ -251,8 +295,12 @@ SHOW_STATUS_INDICATORS: true
 BACKGROUND_MODE: theme
 
 # How long each slideshow image stays on screen before it fades to the
-# next.
+# next. Videos ignore this and play to the end.
 BACKGROUND_SLIDESHOW_SECONDS: 45
+
+# Off by default, and it should usually stay off: the wallpaper talking
+# over a meeting is worse than a silent clip.
+BACKGROUND_VIDEO_SOUND: false
 
 # Off plays them in filename order.
 BACKGROUND_SHUFFLE: true
@@ -296,6 +344,16 @@ WATCHDOG_REBOOT_ENABLED: true
 # With a 1-minute watchdog, 10 means roughly ten minutes of being
 # completely unresponsive.
 WATCHDOG_REBOOT_AFTER_FAILURES: 10
+
+# Pulls the latest version from the repository this room was installed
+# from, before the dashboard starts. A room that cannot reach the
+# repository, or whose files have been edited on the Pi, simply keeps the
+# version it has — updating never stops the room starting.
+AUTO_UPDATE_ON_BOOT: true
+
+# Empty follows whichever branch the Pi is on. Only fast-forward updates
+# are taken, so a branch that has diverged is left alone.
+AUTO_UPDATE_BRANCH: ''
 
 # Optional HH:MM (24-hour) at which the room software restarts itself
 # while nobody is around, e.g. 04:30. Empty disables it.

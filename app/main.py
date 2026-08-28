@@ -19,6 +19,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -36,7 +37,7 @@ from flask import (
 
 from . import __version__, paths
 from .airplay_service import AirPlayService
-from .background_service import BackgroundService
+from .background_service import MAX_VIDEO_BYTES, BackgroundService
 from .browser_service import BrowserService
 from .calendar_service import CalendarService
 from .config import ConfigManager, advisories, get_config
@@ -51,14 +52,20 @@ from .remote_service import ACTIONS, RemoteService
 from .system_service import MANAGED_UNITS, SystemService
 from .web_security import (
     check_csrf,
+    controller_token,
     csrf_token,
     effective_bind_host,
     internal_token,
     is_admin,
+    is_controller,
     is_local_request,
+    lan_access_enabled,
+    pair_controller,
     require_admin,
+    require_controller,
     require_csrf,
     require_internal,
+    rotate_controller_token,
     flask_secret_key,
     verify_pin,
 )
@@ -161,8 +168,10 @@ def create_app(config: ConfigManager | None = None, *, start_services: bool = Tr
         SESSION_COOKIE_SAMESITE="Strict",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         JSON_SORT_KEYS=False,
-        # Cap request bodies so an upload cannot exhaust memory or disk.
-        MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+        # Cap request bodies so an upload cannot exhaust memory or disk. The
+        # cap has to clear the largest thing the slideshow accepts — a video —
+        # or Flask rejects it before background_service can say why.
+        MAX_CONTENT_LENGTH=MAX_VIDEO_BYTES + 4 * 1024 * 1024,
         TEMPLATES_AUTO_RELOAD=config.bool_("DEV_MODE"),
     )
 
@@ -196,6 +205,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "dev_mode": config.bool_("DEV_MODE"),
             "setup_required": config.setup_required(),
             "panel_enabled": config.bool_("PANEL_ENABLED"),
+            "controller_enabled": config.bool_("CONTROLLER_ENABLED"),
         }
 
     @app.after_request
@@ -228,6 +238,40 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         if not is_admin():
             return redirect(url_for("login", next="/panel"))
         return render_template("panel.html", **template_context())
+
+    @app.route("/controller")
+    def controller_page():
+        """The big-button page a phone gets by scanning the code on the TV."""
+        if not config.bool_("CONTROLLER_ENABLED"):
+            return render_template("disabled.html", **template_context()), 404
+        if not is_controller():
+            return redirect(url_for("controller_locked"))
+        context = template_context()
+        context.update(
+            airplay_name=config.airplay_name(),
+            remote_enabled=config.bool_("POLY_REMOTE_ENABLED"),
+            guest=not is_admin(),
+        )
+        return render_template("controller.html", **context)
+
+    @app.route("/c/<token>")
+    def controller_pair(token: str):
+        """Where the QR code on the TV points. Pairs the phone, then gets out of
+        the way: from here on the phone can just open /controller."""
+        if not config.bool_("CONTROLLER_ENABLED"):
+            return render_template("disabled.html", **template_context()), 404
+        if not pair_controller(token):
+            return redirect(url_for("controller_locked"))
+        if config.bool_("CONTROLLER_REQUIRE_PIN") and not is_admin():
+            return redirect(url_for("login", next="/controller"))
+        return redirect(url_for("controller_page"))
+
+    @app.route("/controller/locked")
+    def controller_locked():
+        """Shown when a phone reaches the controller without a valid code."""
+        context = template_context()
+        context.update(pin_required=config.bool_("CONTROLLER_REQUIRE_PIN"))
+        return render_template("controller_locked.html", **context), 403
 
     @app.route("/settings")
     @require_admin
@@ -283,6 +327,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     def api_state():
         """Everything the dashboard renders, in one call."""
         payload = appliance.room.dashboard_payload()
+        media = appliance.backgrounds.list_media()
         payload["backgrounds"] = {
             "mode": config.str_("BACKGROUND_MODE"),
             "seconds": config.int_("BACKGROUND_SLIDESHOW_SECONDS"),
@@ -290,11 +335,19 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "dim": config.int_("BACKGROUND_DIM_PERCENT"),
             "blur": config.int_("BACKGROUND_BLUR_PIXELS"),
             "solid": config.str_("BACKGROUND_SOLID_COLOR"),
-            "images": [image.to_dict()["url"] for image in appliance.backgrounds.list_images()],
+            # "images" stays what it always was — URLs that can be painted as a
+            # CSS background — so a still slideshow never has to know videos
+            # exist. "media" is the full list, in order, for the player.
+            "images": [item.to_dict()["url"] for item in media if not item.is_video],
+            "media": [item.to_dict() for item in media],
+            "video_sound": config.bool_("BACKGROUND_VIDEO_SOUND"),
         }
         payload["display"] = {
             "show_instructions": config.bool_("SHOW_SHARING_INSTRUCTIONS"),
             "show_status": config.bool_("SHOW_STATUS_INDICATORS"),
+            # How often to come back. A capable machine can afford to ask more
+            # often; a Pi 3 has better things to do.
+            "poll_ms": config.performance().poll_ms,
             "theme": config.str_("THEME"),
             "accent": config.str_("ACCENT_COLOR"),
             "show_panel_url": config.bool_("PANEL_SHOW_URL_ON_TV"),
@@ -305,6 +358,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "components": health["components"],
         }
         payload["panel_url"] = _panel_url()
+        payload["controller"] = _controller_hint()
         payload["setup"] = _setup_hint()
         payload["version"] = __version__
         return jsonify(payload)
@@ -340,21 +394,81 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         status_code = 200 if report["status"] != "error" else 503
         return jsonify(report), status_code
 
-    def _panel_url() -> str:
+    # The dashboard polls /api/state every few seconds and asking the kernel for
+    # the room's addresses is not free, so the answer is cached briefly.
+    _lan_cache: dict[str, Any] = {"at": None, "addresses": []}
+
+    def _lan_addresses() -> list[str]:
+        now = time.monotonic()
+        if _lan_cache["at"] is None or now - float(_lan_cache["at"]) > 30.0:
+            _lan_cache["addresses"] = appliance.system.local_ip_addresses()
+            _lan_cache["at"] = now
+        return list(_lan_cache["addresses"])
+
+    def _room_host() -> str:
+        """``host:port`` a phone in the room can reach, else the loopback one."""
         # request.host reflects the port this request actually arrived on, which
         # is what the reader can reach. The configured port may differ after a
         # settings change that has not been restarted into yet, or when --port
         # was used.
-        addresses = appliance.system.local_ip_addresses()
         port = config.int_("DASHBOARD_PORT")
         try:
             if request.host and ":" in request.host:
                 port = int(request.host.rsplit(":", 1)[1])
         except (ValueError, RuntimeError):
             pass
-        if config.bool_("ADMIN_LAN_ACCESS") and addresses:
-            return f"http://{addresses[0]}:{port}/panel"
-        return f"http://127.0.0.1:{port}/panel"
+        addresses = _lan_addresses()
+        if lan_access_enabled(config) and addresses:
+            return f"{addresses[0]}:{port}"
+        return f"127.0.0.1:{port}"
+
+    def _panel_url() -> str:
+        return f"http://{_room_host()}/panel"
+
+    def _controller_url() -> str:
+        """The address inside the QR code: pairs the phone and opens the page."""
+        return f"http://{_room_host()}/c/{controller_token()}"
+
+    def _controller_hint() -> dict[str, Any]:
+        """What the corner of the TV should show.
+
+        The pairing code itself only goes to the kiosk (127.0.0.1). The
+        dashboard is deliberately readable from the LAN, and putting the code
+        in that payload would hand it to anyone who loaded the page without
+        ever looking at the room.
+        """
+        enabled = config.bool_("CONTROLLER_ENABLED")
+        reachable = bool(lan_access_enabled(config) and _lan_addresses())
+        hint: dict[str, Any] = {
+            "enabled": enabled,
+            "show_qr": enabled and config.bool_("CONTROLLER_QR_ON_TV"),
+            "reachable": reachable,
+        }
+        if enabled and is_local_request():
+            hint["host"] = _room_host()
+            hint["url"] = _controller_url() if reachable else ""
+            hint["qr_url"] = "/qr/controller.svg" if reachable else ""
+        return hint
+
+    @app.route("/qr/controller.svg")
+    def qr_controller():
+        """The pairing code as a scannable image, for the TV and the panel."""
+        if not config.bool_("CONTROLLER_ENABLED"):
+            return "Not found", 404
+        # The image *is* the secret, so it is served to the room's own screen
+        # and to signed-in administrators only.
+        if not (is_local_request() or is_admin()):
+            return "Not found", 404
+        from .qr import qr_svg
+
+        try:
+            scale = max(1, min(16, int(request.args.get("scale", 4))))
+        except (TypeError, ValueError):
+            scale = 4
+        response = make_response(qr_svg(_controller_url(), scale=scale))
+        response.headers["Content-Type"] = "image/svg+xml"
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     # -- room actions ----------------------------------------------------
     @app.route("/api/actions/join", methods=["POST"])
@@ -439,6 +553,95 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         result = appliance.room.dispatch_action(action)
         return jsonify({"ok": bool(result.get("ok")), **result})
 
+    # -- the phone controller --------------------------------------------
+    #
+    # Its own two endpoints rather than the /api/actions/* family: those all
+    # require an administrator, and a phone that only scanned the room's code
+    # must never be able to reach settings, restarts or logs. The action list
+    # below is the whole of what a controller can do.
+    CONTROLLER_ACTIONS = frozenset(ACTIONS) | {"leave", "volume_set"}
+
+    @app.route("/api/controller/state")
+    @require_controller
+    def api_controller_state():
+        """Everything the controller renders, in one call."""
+        payload = appliance.room.dashboard_payload()
+        poly = appliance.poly.status()
+        microphone = poly.get("microphone") or {}
+        speaker = poly.get("speaker") or {}
+        camera = poly.get("camera") or {}
+        airplay = payload.get("airplay") or {}
+        return jsonify(
+            {
+                "ok": True,
+                "mode": payload["mode"],
+                "room": payload["room"],
+                "now": payload["now"],
+                "time_format_24h": payload["time_format_24h"],
+                "current": payload["current"],
+                "next": payload["next"],
+                "upcoming": payload["upcoming"],
+                "active_meeting": payload["active_meeting"],
+                "join_available": payload["join_available"],
+                "calendar": payload["calendar"],
+                "network_ok": payload["network_ok"],
+                "setup_required": payload["setup_required"],
+                "sharing": {
+                    "active": bool(airplay.get("sharing")),
+                    "client": airplay.get("client") or "",
+                    "name": airplay.get("name") or "",
+                },
+                "audio": {
+                    "muted": microphone.get("muted"),
+                    "volume": speaker.get("volume"),
+                    "microphone_ok": microphone.get("status") == "ok",
+                    "speaker_ok": speaker.get("status") == "ok",
+                    "camera_ok": camera.get("status") == "ok",
+                },
+                "remote": payload.get("remote"),
+                "is_admin": is_admin(),
+                "version": __version__,
+            }
+        )
+
+    @app.route("/api/controller/action", methods=["POST"])
+    @require_controller
+    @require_csrf
+    def api_controller_action():
+        payload = request.get_json(silent=True) or {}
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in CONTROLLER_ACTIONS:
+            return fail(f"Unknown action: {action}")
+
+        if action == "join":
+            meeting_id = str(payload.get("meeting_id") or "").strip()
+            if meeting_id:
+                success, detail = appliance.room.join_meeting_id(meeting_id)
+                return ok(detail=detail) if success else fail(detail, 409)
+
+        if action == "volume_set":
+            try:
+                level = int(payload.get("level"))
+            except (TypeError, ValueError):
+                return fail("Volume must be a number between 0 and 100.")
+            level = max(0, min(100, level))
+            if appliance.poly.set_volume(level):
+                return ok(volume=level)
+            return fail("No speaker is available.", 409)
+
+        result = appliance.room.dispatch_action(action)
+        return jsonify({"ok": bool(result.get("ok")), **result})
+
+    @app.route("/api/actions/controller-code", methods=["POST"])
+    @require_admin
+    @require_csrf
+    def api_controller_code():
+        """Issue a new pairing code, e.g. after a visitor kept the old one."""
+        rotate_controller_token()
+        return ok(
+            detail="New room code. Phones will need to scan the code on the TV again."
+        )
+
     @app.route("/api/actions/airplay-simulate", methods=["POST"])
     @require_admin
     @require_csrf
@@ -462,6 +665,11 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
             "airplay": ("room-airplay.service", "AirPlay is restarting."),
             "remote": ("room-remote.service", "The remote handler is restarting."),
             "backend": ("room-dashboard.service", "The room software is restarting."),
+            "update": (
+                "room-update.service",
+                "Checking for a software update. The room restarts itself if "
+                "there is one.",
+            ),
         }
 
         if target == "all":
@@ -626,19 +834,19 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     @require_csrf
     def api_backgrounds_upload():
         if not config.bool_("BACKGROUND_ALLOW_UPLOADS"):
-            return fail("Image uploads are switched off in Settings.", 409)
-        uploaded = request.files.get("image")
+            return fail("Background uploads are switched off in Settings.", 409)
+        uploaded = request.files.get("image") or request.files.get("file")
         if uploaded is None:
-            return fail("No image was attached.")
-        image, error = appliance.backgrounds.save(
+            return fail("No file was attached.")
+        item, error = appliance.backgrounds.save(
             uploaded.stream, declared_name=uploaded.filename or ""
         )
-        if image is None:
+        if item is None:
             return fail(error)
-        # Uploading the first image is a clear signal the slideshow is wanted.
+        # Uploading the first one is a clear signal the slideshow is wanted.
         if config.str_("BACKGROUND_MODE") == "theme" and appliance.backgrounds.count() == 1:
             config.update({"BACKGROUND_MODE": "slideshow"})
-        return ok(image=image.to_dict(), count=appliance.backgrounds.count())
+        return ok(image=item.to_dict(), count=appliance.backgrounds.count())
 
     @app.route("/api/backgrounds/<name>", methods=["DELETE"])
     @require_admin
@@ -646,7 +854,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
     def api_backgrounds_delete(name: str):
         if appliance.backgrounds.delete(name):
             return ok(count=appliance.backgrounds.count())
-        return fail("That image is not in the slideshow.", 404)
+        return fail("That file is not in the slideshow.", 404)
 
     @app.route("/media/backgrounds/<name>")
     def media_background(name: str):

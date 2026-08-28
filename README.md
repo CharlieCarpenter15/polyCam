@@ -42,7 +42,9 @@ network. No keyboard, no YAML, no SSH.
 - [First-time account sign-in](#first-time-account-sign-in)
 - [Using the room](#using-the-room)
 - [The control panel](#the-control-panel)
+- [The room controller (scan the code)](#the-room-controller-scan-the-code)
 - [Background slideshow](#background-slideshow)
+- [Keeping the software up to date](#keeping-the-software-up-to-date)
 - [Poly conference bar](#poly-conference-bar)
 - [Poly remote / controller](#poly-remote--controller)
 - [AirPlay screen sharing](#airplay-screen-sharing)
@@ -76,9 +78,35 @@ The two halves of this appliance have very different appetites:
 
 | | Dashboard, calendar, AirPlay, one-touch join | Being the video endpoint in a call |
 | --- | --- | --- |
+| **Mini-PC / NUC (x86, 4+ cores, 8 GB)** | Trivial | Comfortable |
 | **Pi 5 (4/8 GB)** | Comfortable | Works |
 | **Pi 4 (4/8 GB)** | Comfortable | Usable, runs warm |
 | **Pi 3 (1 GB)** | Fine | **Not realistically** |
+
+**It is not only for a Pi, and it tunes itself.** At startup the room measures
+the machine — cores, memory, whether it is a Raspberry Pi at all — and picks a
+profile. On a mini-PC or a NUC that means **high**: Chromium is told to use the
+GPU properly (rasterisation, hardware video decode, no background throttling of
+a window that is in a call), and the join automation stops padding its timings
+for hardware that does not need the padding.
+
+| Profile | Picked for | What changes |
+| --- | --- | --- |
+| `high` | Not a Pi, 4+ cores, 8 GB+ | GPU rasterisation, zero-copy, hardware video decode, no renderer backgrounding; join settles in ~3 s instead of 8, gives up after 60 s; dashboard polls every 3.5 s |
+| `balanced` | Pi 4, Pi 5, a modest PC | The shipped defaults, unchanged |
+| `low` | Pi 3, or under 2 GB | Fewer renderer processes, no smooth scrolling; join waits four times as long and keeps trying for five minutes |
+
+```bash
+./scripts/roomctl performance              # what it decided, and why
+./scripts/roomctl performance high         # override the guess
+./scripts/roomctl performance auto         # back to measuring
+```
+
+A profile only ever supplies **defaults**. Anything you have set yourself —
+`JOIN_SETTLE_SECONDS`, `AUTO_JOIN_TIMEOUT_SECONDS` — still wins, so the room
+never quietly argues with a value you typed. `roomctl status` and
+`GET /api/health` both report the machine it found and the profile it is
+running.
 
 A Pi 3 has 1 GB of RAM and no hardware video encode. Chromium plus a live
 Google Meet or Teams call needs more memory than that, and the outgoing camera
@@ -292,6 +320,10 @@ TV returns to the dashboard by itself. There is also a hard limit — by default
 four hours — so the room can never be stuck on a stale meeting screen even if
 the calendar says something strange.
 
+**From a phone.** Scan the small code in the bottom-right corner of the TV and
+the room's buttons open on the phone — join, leave, mute, camera, volume. See
+[The room controller](#the-room-controller-scan-the-code).
+
 **Sharing a screen.** Mac or iPhone → Control Centre → Screen Mirroring →
 *Meeting Room*. The dashboard steps aside; when mirroring stops it comes back.
 
@@ -329,13 +361,94 @@ control-panel address on the TV**.
 
 ---
 
+## The room controller (scan the code)
+
+The control panel above is for whoever looks after the room. The **controller**
+is for whoever is *in* it: a phone-sized page with the room's buttons on it,
+opened by pointing a camera at the small QR code in the bottom-right corner of
+the TV. No app, no PIN, nothing to remember.
+
+```
+                                            ┌──────────┐
+                                            │ ▙▚▘▟▘▚▙▘ │   Scan to control
+                                            │ ▘▙▚▟▚▘▙▚ │   this room
+                                            └──────────┘
+```
+
+**What it does**
+
+| | |
+| --- | --- |
+| Join / Leave | The one big button, which reads the room: join the meeting that is due, or leave the one that is running |
+| Microphone | Mute and unmute, showing which it currently is |
+| Camera | On and off in the meeting |
+| Volume | Up, down, and a slider |
+| Show dashboard | Put the room screen back on the TV |
+| Today's meetings | Tap any one of them to join that meeting instead |
+
+It shows what the room is doing in plain English — nothing scheduled, starting
+in four minutes, in a meeting, someone is sharing their screen, the room is
+offline — and it says what to do next in each case. Pressing a button on the
+physical Poly remote shows up on the phone too, and on the TV, so two people
+are never fighting a room that appears not to respond.
+
+**Turning it on**
+
+The QR code appears once phones on the room's network can actually reach the
+Pi. That is one switch:
+
+**Settings → Room controller → Let phones on the room network open the
+controller** — or from a terminal:
+
+```bash
+./scripts/roomctl set CONTROLLER_LAN_ACCESS true
+./scripts/roomctl restart backend
+./scripts/roomctl qr                  # the address behind the QR code
+```
+
+If **Allow settings from other computers on the network** is already on, the
+controller is reachable and the code appears without changing anything.
+
+**What a scanned phone can do**
+
+By default: everything. The appliance is a Raspberry Pi on a wall with no
+keyboard, and the point of the code is that a phone is the keyboard — including
+for first-run setup, which happens before a PIN exists to ask for. Scanning it
+signs that phone in to the room: the room buttons, Settings, the background
+slideshow, restarts, updates, diagnostics and logs.
+
+The trade is "whoever can see this screen can run this room", which is close to
+what standing in the room already means — and the code is shown on the room's
+own screen and served nowhere else, so it cannot be fetched over the network.
+Three settings tighten it where that is not the right trade:
+
+| Setting | |
+| --- | --- |
+| **A scanned phone can do everything** (off) | Back to the room buttons alone — join, leave, mute, camera, volume — with everything else asking for the PIN |
+| **Ask for the admin PIN on the controller too** | For a room in a public space: scanning grants nothing on its own |
+| **New code** (control panel → Room controller) | Issues a fresh code and signs out every phone that ever scanned the old one |
+
+Turn the whole thing off with **Settings → Room controller → Phone
+controller**, or hide just the code with **Show the QR code on the TV**.
+
+---
+
 ## Background slideshow
 
-By default the dashboard uses a built-in gradient. To use your own photos:
+By default the dashboard uses a built-in gradient. To use your own photos and
+video:
 
 1. Control panel → **Background**
-2. **+ Add images** — JPEG, PNG, GIF or WebP, up to 12 MB each, 60 images total
+2. **+ Add images or video** — JPEG, PNG, GIF or WebP up to 12 MB each, MP4,
+   WebM or MOV up to 200 MB each, 60 files in total
 3. Adjust **Seconds per image**, **Darken for readability** and **Shuffle**
+
+**Videos play in full.** *Seconds per image* is what it says — it applies to
+stills. A video is never cut off part way: it plays to its end and only then
+does the slideshow move on. Sound is off unless you turn on **Play sound with
+background videos**, and a clip the TV cannot decode (an iPhone HEVC recording,
+usually) is skipped rather than left as a black screen. For a wall loop, H.264
+MP4 is the safe choice on a Raspberry Pi.
 
 Uploading your first image switches the background to slideshow mode
 automatically. Images crossfade, and the darkening layer keeps the clock and
@@ -345,6 +458,73 @@ read from across the room.
 Uploads are checked by their actual file contents, not their filename, so a
 renamed file cannot slip something else onto the screen. Images are stored in
 `var/backgrounds`.
+
+---
+
+## Keeping the software up to date
+
+The room updates itself when it boots. `room-update.service` runs before the
+dashboard and the kiosk start, pulls the branch this Pi was installed from, and
+gets out of the way.
+
+It is deliberately timid, because a room that will not start is much worse than
+a room running last month's code:
+
+**The remote branch wins.** The checkout is *reset* to it, not merged with it:
+anything edited on the Pi is discarded, and a checkout that has drifted is
+straightened out rather than skipped. A room should run the code everyone else
+can see, not a local variant nobody remembers making. Edit on your laptop, push,
+and the room picks it up.
+
+**The room's own state is not code, and is never touched.** Everything git
+ignores survives every update:
+
+| Kept | |
+| --- | --- |
+| `config/config.yaml` | The room's calendar, name, PIN, every setting |
+| `.env` | Environment overrides |
+| `var/` | Calendar cache, pairing code, background images and videos, and the Chromium profile with its signed-in room accounts |
+| `.venv/` | The virtualenv |
+
+| Situation | What happens |
+| --- | --- |
+| No network yet | Waits up to a minute, retries the fetch three times, then gives up and starts on the current version |
+| Files edited on the Pi | Discarded — the count is logged, so `journalctl` can answer "where did my edit go?" |
+| The branch has diverged | Reset onto the remote branch |
+| `requirements.txt` changed | The virtualenv is updated too |
+| A systemd unit changed | Units are reinstalled and reloaded |
+| Anything at all fails | Logged, exit 0, the room starts anyway |
+
+**Update now, without rebooting**
+
+```bash
+./scripts/roomctl update          # pull, then restart the room
+```
+
+or from a phone: control panel → **If something looks wrong** is for repairs;
+the update lives with the restarts as **Check for a software update**.
+
+**Watch what it did**
+
+```bash
+journalctl --user -u room-update.service -n 50
+```
+
+**Turning it off**
+
+**Settings → Reliability & recovery → Update the room software when it boots**,
+or:
+
+```bash
+./scripts/roomctl set AUTO_UPDATE_ON_BOOT false
+```
+
+Set **Branch to update from** (`AUTO_UPDATE_BRANCH`) to pin a room to one
+branch; empty means "whichever branch this Pi is on".
+
+Worth being clear about the trade: with this on, whoever can push to that
+branch can change what the room runs. That is the point of it, and it is fine
+for a repository you control — but it is the reason the setting exists.
 
 ---
 
@@ -1026,6 +1206,21 @@ The appliance sits on an office network in a shared room, so:
 - **The Pi itself is trusted; nothing else is.** Requests from `127.0.0.1` are
   the kiosk and local scripts. Everything else needs the PIN. `X-Forwarded-For`
   is deliberately ignored, so a remote client cannot claim to be local.
+- **The QR code on the TV signs a phone in to that room.** This is a deliberate
+  trade, not an oversight: the appliance has no keyboard, and first-run setup
+  has to be possible before a PIN exists. The threat model is the honest one for
+  a meeting room — whoever can see the screen can already walk over and press
+  the buttons on it. Two settings narrow it: `CONTROLLER_FULL_ACCESS` off leaves
+  a scanned phone with the room buttons only (join, leave, mute, camera, volume
+  — the API behind them accepts that fixed list and refuses everything else),
+  and `CONTROLLER_REQUIRE_PIN` withdraws even that.
+- **The pairing code never leaves the Pi.** It lives in `var/controller-token`
+  (mode `0600`), and both the code and the QR image are served only to
+  `127.0.0.1` and to signed-in administrators — the dashboard is readable from
+  the LAN, so putting either in that payload would hand the room to anyone who
+  loaded the page without ever looking at it. Wrong codes are rate-limited on
+  the same counter as the PIN, and **New code** on the control panel invalidates
+  every phone paired so far.
 - **PIN attempts are rate-limited** (6 tries, then a two-minute pause) and
   compared in constant time.
 - **Every state-changing request needs a page token** (`X-Room-Token`), which
@@ -1061,6 +1256,7 @@ The appliance sits on an office network in a shared room, so:
 | `var/calendar-cache.json` | `0600` | Contains meeting URLs |
 | `var/flask-secret-key` | `0600` | Session signing key |
 | `var/internal-token` | `0600` | Shared secret for helper scripts |
+| `var/controller-token` | `0600` | Pairing code behind the QR on the TV |
 | `var/chromium-profile/` | `0700` | Room account sessions and cookies |
 | `var/backgrounds/` | `0755` | Images, served to the dashboard |
 
@@ -1149,6 +1345,8 @@ A test fails if you forget.
 ```bash
 ./scripts/roomctl status              how is the room?
 ./scripts/roomctl screen              why is the TV blank / white / wrong?
+./scripts/roomctl performance         what machine is this, and how hard is it pushed?
+./scripts/roomctl performance high    override the guess (auto|high|balanced|low)
 ./scripts/roomctl slow-device on      retune for a Pi 3 / older hardware
 ./scripts/roomctl port                show the dashboard port
 ./scripts/roomctl port auto           move to a free port (or: port 9123)
@@ -1193,6 +1391,11 @@ Localhost needs no authentication; anything else needs the PIN, and every
 | `POST /api/actions/reboot` · `/reset-safe` | |
 | `GET/POST /api/backgrounds` · `DELETE /api/backgrounds/<name>` | Slideshow images |
 | `GET /api/diagnostics` · `GET /api/logs` | |
+| `GET /api/controller/state` | What the phone controller renders |
+| `POST /api/controller/action` | `{"action": "join｜leave｜home｜mute｜camera｜volume_up｜volume_down｜volume_set"}` |
+| `POST /api/actions/controller-code` | Issue a new pairing code (admin) |
+| `GET /qr/controller.svg` | The pairing code as an image (the Pi and admins only) |
+| `GET /c/<code>` | Where the QR points: pairs the phone, opens the controller |
 
 ---
 
