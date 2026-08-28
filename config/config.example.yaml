@@ -86,6 +86,11 @@ JOIN_SETTLE_SECONDS: 0.0
 
 AUTO_JOIN_TIMEOUT_SECONDS: 90
 
+# A slow meeting page can look unchanged for several seconds after Join is
+# pressed. Without this guard the room presses it again, and again, which
+# looks like the meeting being opened several times over.
+JOIN_REPEAT_GUARD_SECONDS: 25.0
+
 # Grace period after a meeting's scheduled end before the TV goes back to
 # the room screen.
 RETURN_HOME_MINUTES: 2.0
@@ -202,6 +207,30 @@ POLY_CAMERA_KEY: ''
 POLY_HOME_KEY: KEY_HOME
 
 POLY_VOLUME_STEP: 5
+
+# ----------------------------------------------------------------------
+# Room controller (phone)
+#   The big-button page anyone in the room can open by scanning the QR
+#   code on the TV. It joins, leaves, mutes and changes the volume — and
+#   nothing else.
+# ----------------------------------------------------------------------
+# A big-button page for whoever is in the room: join, leave, mute, camera
+# and volume. It is opened by scanning the code on the TV — no app to
+# install and no PIN to remember.
+CONTROLLER_ENABLED: true
+
+# A small code in the bottom-right corner of the room screen. Point a
+# phone camera at it to open the controller for this room.
+CONTROLLER_QR_ON_TV: true
+
+# Needed for the QR code to work when “Allow settings from other computers
+# on the network” is off. It exposes the controller and the read-only
+# dashboard only: settings, restarts and logs still need the admin PIN.
+CONTROLLER_LAN_ACCESS: false
+
+# Turn this on for a room in a public space, where being able to see the
+# TV should not be enough to control it.
+CONTROLLER_REQUIRE_PIN: false
 
 # ----------------------------------------------------------------------
 # Display & browser

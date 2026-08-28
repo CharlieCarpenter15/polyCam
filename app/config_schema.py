@@ -114,6 +114,7 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("airplay", "AirPlay screen sharing"),
     ("audio", "Poly conference bar"),
     ("remote", "Poly remote / controller"),
+    ("controller", "Room controller (phone)"),
     ("display", "Display & browser"),
     ("background", "Background & slideshow"),
     ("recovery", "Reliability & recovery"),
@@ -129,6 +130,9 @@ GROUP_HELP: dict[str, str] = {
     "airplay": "Wireless screen sharing from a Mac, iPhone or iPad.",
     "audio": "The USB conference bar used as camera, microphone and speaker.",
     "remote": "Optional physical remote / controller buttons.",
+    "controller": "The big-button page anyone in the room can open by scanning\n"
+    "the QR code on the TV. It joins, leaves, mutes and changes the volume — and\n"
+    "nothing else.",
     "display": "Chromium kiosk behaviour on the TV.",
     "background": "The wallpaper behind the dashboard. Upload your own photos "
     "from the control panel and they rotate as a slideshow.",
@@ -323,6 +327,19 @@ FIELDS: tuple[Field, ...] = (
         advanced=True,
     ),
     Field(
+        key="JOIN_REPEAT_GUARD_SECONDS",
+        type="float",
+        default=25.0,
+        minimum=0.0,
+        maximum=300.0,
+        group="meetings",
+        label="Do not press the same button twice within (seconds)",
+        help="A slow meeting page can look unchanged for several seconds after "
+        "Join is pressed. Without this guard the room presses it again, and "
+        "again, which looks like the meeting being opened several times over.",
+        advanced=True,
+    ),
+    Field(
         key="RETURN_HOME_MINUTES",
         type="float",
         default=2.0,
@@ -384,6 +401,48 @@ FIELDS: tuple[Field, ...] = (
         group="meetings",
         label="Join muted",
         help="Ask the meeting page to mute the room's microphone on entry.",
+        advanced=True,
+    ),
+    # -- Room controller ----------------------------------------------------
+    Field(
+        key="CONTROLLER_ENABLED",
+        type="bool",
+        default=True,
+        group="controller",
+        label="Phone controller",
+        help="A big-button page for whoever is in the room: join, leave, mute, "
+        "camera and volume. It is opened by scanning the code on the TV — no "
+        "app to install and no PIN to remember.",
+    ),
+    Field(
+        key="CONTROLLER_QR_ON_TV",
+        type="bool",
+        default=True,
+        group="controller",
+        label="Show the QR code on the TV",
+        help="A small code in the bottom-right corner of the room screen. Point "
+        "a phone camera at it to open the controller for this room.",
+    ),
+    Field(
+        key="CONTROLLER_LAN_ACCESS",
+        type="bool",
+        default=False,
+        group="controller",
+        label="Let phones on the room network open the controller",
+        help="Needed for the QR code to work when “Allow settings from other "
+        "computers on the network” is off. It exposes the controller and the "
+        "read-only dashboard only: settings, restarts and logs still need the "
+        "admin PIN.",
+        restart_units=("room-dashboard.service",),
+    ),
+    Field(
+        key="CONTROLLER_REQUIRE_PIN",
+        type="bool",
+        default=False,
+        group="controller",
+        label="Ask for the admin PIN on the controller too",
+        help="Turn this on for a room in a public space, where being able to see "
+        "the TV should not be enough to control it.",
         advanced=True,
     ),
     # -- AirPlay ------------------------------------------------------------

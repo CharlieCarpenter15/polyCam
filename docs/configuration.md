@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 79 options. All have working defaults; a fresh install
+There are 84 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -45,6 +45,7 @@ needs only a calendar link.
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join automatically. Best effort. Teams, Meet and Zoom change their web pages without notice, so if this fails the big JOIN button on the dashboard always works. |
 | `JOIN_SETTLE_SECONDS` | `0.0` | Wait before pressing anything (seconds). 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower hardware: pressing buttons on a page that has not finished drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40. (min 0, max 120) _Advanced._ |
 | `AUTO_JOIN_TIMEOUT_SECONDS` | `90` | Give up on auto-join after (seconds). (min 10, max 600) _Advanced._ |
+| `JOIN_REPEAT_GUARD_SECONDS` | `25.0` | Do not press the same button twice within (seconds). A slow meeting page can look unchanged for several seconds after Join is pressed. Without this guard the room presses it again, and again, which looks like the meeting being opened several times over. (min 0, max 300) _Advanced._ |
 | `RETURN_HOME_MINUTES` | `2.0` | Return to dashboard after (minutes). Grace period after a meeting's scheduled end before the TV goes back to the room screen. (min 0, max 120) |
 | `MAX_MEETING_MINUTES` | `240` | Hard limit on a meeting screen (minutes). Safety net: the appliance never stays on a meeting page longer than this, even if the calendar goes strange. (min 10, max 1440) _Advanced._ |
 | `JOIN_BUTTON_TEXTS` | `Continue on this browser, Use the web app instead, Continue in this browser … (+7)` | Buttons the auto-join may press. One per line, matched case-insensitively against on-screen button text. Update this list if a provider renames a button — no code change needed. _Advanced._ |
@@ -87,6 +88,15 @@ needs only a calendar link.
 | `POLY_CAMERA_KEY` | empty | Camera button. Optional. Toggles the camera in the meeting where supported. Restarts: room-remote. |
 | `POLY_HOME_KEY` | `KEY_HOME` | Home button. Forces the TV back to the room dashboard. Restarts: room-remote. |
 | `POLY_VOLUME_STEP` | `5` | Volume step (%). (min 1, max 25) _Advanced._ Restarts: room-remote. |
+
+## Room controller (phone)
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `CONTROLLER_ENABLED` | `true` | Phone controller. A big-button page for whoever is in the room: join, leave, mute, camera and volume. It is opened by scanning the code on the TV — no app to install and no PIN to remember. |
+| `CONTROLLER_QR_ON_TV` | `true` | Show the QR code on the TV. A small code in the bottom-right corner of the room screen. Point a phone camera at it to open the controller for this room. |
+| `CONTROLLER_LAN_ACCESS` | `false` | Let phones on the room network open the controller. Needed for the QR code to work when “Allow settings from other computers on the network” is off. It exposes the controller and the read-only dashboard only: settings, restarts and logs still need the admin PIN. Restarts: room-dashboard. |
+| `CONTROLLER_REQUIRE_PIN` | `false` | Ask for the admin PIN on the controller too. Turn this on for a room in a public space, where being able to see the TV should not be enough to control it. _Advanced._ |
 
 ## Display & browser
 
