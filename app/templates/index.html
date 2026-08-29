@@ -74,9 +74,10 @@
     </section>
 
     <footer class="bottom">
-      <!-- How to get a screen onto this TV. Two lines because there are two
-           answers: Apple devices discover the room by themselves, a PC is
-           given an address to open. -->
+      <!-- How to get a screen onto this TV. Each line is a route, shown only
+           when it can actually work: Apple devices over AirPlay, Windows over
+           Miracast, and the browser address as the fallback that needs no
+           special hardware (see _cast_hint in main.py for when it appears). -->
       <div class="sharing-ways">
         <div class="sharing" id="sharing" >
           <span class="sharing-icon" aria-hidden="true">
@@ -87,6 +88,21 @@
           </span>
           <span class="sharing-text">
             Screen Mirroring &rarr; <strong id="airplay-name">{{ room_name }}</strong>
+          </span>
+        </div>
+
+        <div class="sharing" id="sharing-miracast" hidden>
+          <span class="sharing-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor"
+                 stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 8a13 13 0 0 1 18 0"></path>
+              <path d="M6.5 11.5a8.5 8.5 0 0 1 11 0"></path>
+              <path d="M10 15a4 4 0 0 1 4 0"></path>
+              <circle cx="12" cy="18.5" r="0.8" fill="currentColor"></circle>
+            </svg>
+          </span>
+          <span class="sharing-text">
+            Windows &#8984;+K &rarr; <strong id="miracast-name">{{ room_name }}</strong>
           </span>
         </div>
 

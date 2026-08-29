@@ -634,6 +634,9 @@ class ConfigManager:
     def airplay_name(self) -> str:
         return self.str_("AIRPLAY_NAME") or self.str_("ROOM_NAME") or "Meeting Room"
 
+    def miracast_name(self) -> str:
+        return self.str_("MIRACAST_NAME") or self.str_("ROOM_NAME") or "Meeting Room"
+
     def join_display_name(self) -> str:
         return self.str_("JOIN_DISPLAY_NAME") or self.str_("ROOM_NAME") or "Meeting Room"
 

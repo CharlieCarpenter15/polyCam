@@ -6,9 +6,9 @@ service turns them into a decision and the actions that follow from it.
 
 Precedence, highest first:
 
-1. ``screen-sharing`` — someone is mirroring, so their screen is on the TV
-   (from a Mac over AirPlay, or from a PC over the room's network — the room
-   behaves the same either way)
+1. ``screen-sharing`` — someone is mirroring, so their screen is on the TV.
+   Three ways in: AirPlay from a Mac, Miracast from a Windows laptop, or the
+   browser fallback. The room behaves identically whichever it was
 2. ``meeting``        — the TV is on a meeting page
 3. ``offline``        — no network; the dashboard stays up and says so
 4. ``home``           — the room dashboard
@@ -39,6 +39,7 @@ from .browser_service import BrowserService
 from .calendar_service import CalendarService
 from .cast_service import CastService
 from .config import ConfigManager
+from .miracast_service import MiracastService
 from .logging_setup import get_logger, log_event
 from .models import (
     MODE_HOME,
@@ -125,6 +126,7 @@ class MeetingService:
         browser: BrowserService,
         airplay: AirPlayService,
         cast: CastService,
+        miracast: MiracastService,
         poly: PolyService,
         system: SystemService,
     ) -> None:
@@ -133,6 +135,7 @@ class MeetingService:
         self.browser = browser
         self.airplay = airplay
         self.cast = cast
+        self.miracast = miracast
         self.poly = poly
         self.system = system
 
@@ -154,6 +157,7 @@ class MeetingService:
 
         airplay.on_change(self._on_sharing_change)
         cast.on_change(self._on_sharing_change)
+        miracast.on_change(self._on_sharing_change)
 
     # -- lifecycle -------------------------------------------------------
     def start(self) -> None:
@@ -186,8 +190,8 @@ class MeetingService:
 
     @property
     def sharing(self) -> bool:
-        """True while anybody's screen is on the TV, by either route."""
-        return self.airplay.sharing or self.cast.sharing
+        """True while anybody's screen is on the TV, by any of the three routes."""
+        return self.airplay.sharing or self.miracast.sharing or self.cast.sharing
 
     def sharing_refusal(self) -> str:
         """Why the room's *current state* forbids a new share, or "".
@@ -215,13 +219,16 @@ class MeetingService:
         return ""
 
     def _on_sharing_change(self, sharing: bool) -> None:
-        """React immediately when sharing starts or stops, by either route."""
+        """React immediately when sharing starts or stops, by any route."""
         if sharing:
             with self._lock:
                 in_meeting = self._state.active is not None
             if in_meeting and not self.config.bool_("AIRPLAY_INTERRUPTS_MEETING"):
-                log_event(log, logging.WARNING, "airplay.refused_during_meeting")
+                log_event(log, logging.WARNING, "sharing.refused_during_meeting")
+                # Whichever receiver it was, clear them all: each is a no-op if
+                # it was not the one sharing, and the callback does not say.
                 self.airplay.force_stop_sharing()
+                self.miracast.force_stop_sharing()
                 self.cast.end_current(reason="this room does not allow sharing during a meeting")
                 return
         else:
@@ -415,6 +422,8 @@ class MeetingService:
         # in here — and the lock below is not reentrant.
         if self.airplay.sharing:
             self.airplay.force_stop_sharing()
+        if self.miracast.sharing:
+            self.miracast.force_stop_sharing()
         self.cast.end_current(reason="a meeting is starting in this room")
 
         with self._open_lock:
@@ -651,6 +660,7 @@ class MeetingService:
             },
             "remote": self.recent_remote_action(now),
             "airplay": self.airplay.status(),
+            "miracast": self.miracast.status(),
             "cast": self.cast.status(),
             "network_ok": network_ok,
             "setup_required": self.config.setup_required(),

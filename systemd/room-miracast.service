@@ -1,0 +1,36 @@
+# Room appliance: Miracast receiver (Windows "Connect to a wireless display").
+#
+# Kept separate from the backend, like the AirPlay unit, so people can still put
+# a screen on the TV while the room software is restarting.
+#
+# Off unless MIRACAST_ENABLED is set: it needs a Wi-Fi radio free for Wi-Fi
+# Direct and receiver software that is not packaged for Raspberry Pi OS, so a
+# room has to opt in. Run scripts/detect-miracast.sh first.
+
+[Unit]
+Description=Meeting room Miracast receiver
+Documentation=file://__ROOM_DIR__/README.md
+After=graphical-session.target network-online.target avahi-daemon.service
+Wants=network-online.target
+
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOM_DIR__
+ExecStart=__ROOM_DIR__/scripts/start-miracast.sh
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+KillMode=control-group
+
+Environment=PYTHONUNBUFFERED=1
+# GStreamer picks a sensible sink on its own; override here if a room needs it.
+EnvironmentFile=-__ROOM_DIR__/.env
+
+SyslogIdentifier=room-miracast
+
+[Install]
+WantedBy=default.target

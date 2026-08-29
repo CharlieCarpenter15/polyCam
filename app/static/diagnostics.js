@@ -25,10 +25,21 @@
 
   var COMPONENT_LABELS = {
     backend: "Room software", calendar: "Calendar", browser: "TV display (Chromium)",
-    airplay: "AirPlay receiver", cast: "Sharing from a PC",
+    airplay: "AirPlay receiver", miracast: "Miracast (Win+K)",
+    cast: "Sharing from a PC (browser)",
     camera: "Camera", microphone: "Microphone",
     speaker: "Speaker", network: "Network"
   };
+
+  // Miracast fails for hardware reasons more often than software ones, and the
+  // supervisor is the only thing that knows which. Say what it said.
+  function miracastDetail(miracast) {
+    if (miracast.enabled === false) return "";
+    if (miracast.blocked) return miracast.blocked;
+    if (miracast.sharing) return "mirroring from " + (miracast.client || "a laptop");
+    if (!miracast.installed_backend) return "no receiver software installed";
+    return "ready (" + (miracast.backend || "?") + ")";
+  }
 
   // The one thing worth reading here is why it is not working, if it is not.
   function castDetail(cast) {
@@ -46,6 +57,7 @@
         calendar: (health.calendar && (health.calendar.error || health.calendar.description)) || "",
         browser: (health.browser && health.browser.current_url) || "",
         airplay: (health.airplay && health.airplay.name) ? ("advertising “" + health.airplay.name + "”") : "",
+        miracast: miracastDetail(health.miracast || {}),
         cast: castDetail(health.cast || {}),
         camera: ((health.poly || {}).camera || {}).path || "",
         microphone: ((health.poly || {}).microphone || {}).description || "",

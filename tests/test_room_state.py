@@ -10,6 +10,7 @@ from app.airplay_service import AirPlayService
 from app.browser_service import BrowserService
 from app.calendar_service import CalendarService
 from app.cast_service import CastService
+from app.miracast_service import MiracastService
 from app.meeting_service import REMOTE_ACTION_TTL_SECONDS, MeetingService
 from app.models import MODE_HOME, MODE_MEETING, MODE_OFFLINE, MODE_SHARING, Meeting
 from app.poly_service import PolyService
@@ -73,13 +74,17 @@ def room(mock_config):
     poly = PolyService(config)
     browser = FakeBrowser()
     cast = CastService(config)
-    service = MeetingService(config, calendar, browser, airplay, cast, poly, system)
+    miracast = MiracastService(config, system)
+    service = MeetingService(
+        config, calendar, browser, airplay, cast, miracast, poly, system
+    )
     return {
         "config": config,
         "calendar": calendar,
         "browser": browser,
         "airplay": airplay,
         "cast": cast,
+        "miracast": miracast,
         "room": service,
     }
 

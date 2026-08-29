@@ -143,12 +143,63 @@ AIRPLAY_EXTRA_ARGS: ''
 AIRPLAY_INTERRUPTS_MEETING: true
 
 # ----------------------------------------------------------------------
-# Screen sharing from a PC
-#   The other half of wireless sharing: a Windows PC, Chromebook or
-#   Linux laptop opens the address shown on the TV, presses one button
-#   and picks a window. Nothing to install. The video goes straight from
-#   the laptop to the TV over the room's network, so the Pi only
-#   introduces the two of them.
+# Miracast (Windows wireless display)
+#   What Windows calls “Connect to a wireless display” (Win+K): the room
+#   appears in a list the operating system draws, and nothing is
+#   installed or typed on the laptop. The closest thing to AirPlay there
+#   is. Off by default because it needs a Wi-Fi radio free for Wi-Fi
+#   Direct and receiver software that Raspberry Pi OS does not package —
+#   run scripts/detect-miracast.sh, which says whether this room can.
+# ----------------------------------------------------------------------
+# Lets a Windows laptop mirror with Win+K, picking this room from the list
+# Windows draws — nothing installed, nothing typed. Needs a Wi-Fi radio
+# free for Wi-Fi Direct and a receiver backend installed. Run
+# scripts/detect-miracast.sh before turning this on; it says whether this
+# machine can, and what is missing if not.
+MIRACAST_ENABLED: false
+
+# What appears in the Windows wireless-display list. Leave empty to use
+# the room name.
+MIRACAST_NAME: ''
+
+# Optional PIN Windows must be given before it can mirror. Empty means
+# anyone in range can. Not supported by every backend.
+MIRACAST_PIN: ''
+
+# Which receiver software to drive. “auto” uses whichever is installed.
+# Neither is in the Raspberry Pi OS archive, so one has to be built — see
+# the README.
+# options: auto, miraclecast, lazycast
+MIRACAST_BACKEND: auto
+
+# Miracast over Infrastructure: Windows is still found over Wi-Fi Direct,
+# but the picture travels over the ordinary network, which is lower
+# latency and steadier. Turn off only if a laptop will not connect.
+MIRACAST_INFRASTRUCTURE: true
+
+# Leave empty to use the first wireless interface. Name it in a room with
+# two adapters, so the one carrying the network is not taken over.
+MIRACAST_INTERFACE: ''
+
+# A Miracast receiver needs a radio not associated with any network. Off,
+# the receiver refuses to start and says so rather than risk the room's
+# connection. On, it disconnects that interface — and only if a wired
+# connection is up, so the room cannot be stranded.
+MIRACAST_FREE_RADIO: false
+
+# Where lazycast is checked out, if that is the backend.
+MIRACAST_LAZYCAST_DIR: /opt/lazycast
+
+# Appended to the backend's command line for unusual setups.
+MIRACAST_EXTRA_ARGS: ''
+
+# ----------------------------------------------------------------------
+# Screen sharing from a PC (browser)
+#   The fallback for when Miracast cannot work: a Windows PC, Chromebook
+#   or Linux laptop opens the address shown on the TV, presses one
+#   button and picks a window. Nothing to install. The video goes
+#   straight from the laptop to the TV over the room's network, so the
+#   Pi only introduces the two of them.
 # ----------------------------------------------------------------------
 # Lets a Windows, Linux or Chromebook laptop share its screen by opening
 # the address the TV shows. This opens a second port on the room's
@@ -172,9 +223,12 @@ CAST_SECURE_PORT: 8443
 # behaves by default.
 CAST_PIN: ''
 
-# Off, sharing still works for anyone who knows the address, but the TV
-# stops advertising it.
-CAST_SHOW_ON_TV: true
+# “auto” shows it only when Miracast is not working, so a room with Win+K
+# sharing keeps a clean screen and one with a problem still tells people
+# what to do. “always” also suits rooms with Chromebooks or Linux laptops,
+# which have no Miracast.
+# options: auto, always, never
+CAST_SHOW_ON_TV: auto
 
 # ----------------------------------------------------------------------
 # Poly conference bar

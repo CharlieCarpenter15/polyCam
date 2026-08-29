@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 94 options. All have working defaults; a fresh install
+There are 103 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -62,7 +62,21 @@ needs only a calendar link.
 | `AIRPLAY_EXTRA_ARGS` | empty | Extra UxPlay arguments. Appended to the uxplay command line for unusual setups. _Advanced._ Restarts: room-airplay. |
 | `AIRPLAY_INTERRUPTS_MEETING` | `true` | Allow screen sharing during a meeting. On: mirroring covers the meeting on the TV (the call keeps running). Off: mirroring is refused during a meeting. Either way, sharing through Teams or Meet is better, because remote participants can see it too. _Advanced._ |
 
-## Screen sharing from a PC
+## Miracast (Windows wireless display)
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `MIRACAST_ENABLED` | `false` | Enable the Miracast receiver. Lets a Windows laptop mirror with Win+K, picking this room from the list Windows draws — nothing installed, nothing typed. Needs a Wi-Fi radio free for Wi-Fi Direct and a receiver backend installed. Run scripts/detect-miracast.sh before turning this on; it says whether this machine can, and what is missing if not. Restarts: room-miracast. |
+| `MIRACAST_NAME` | empty | Miracast name. What appears in the Windows wireless-display list. Leave empty to use the room name. Restarts: room-miracast. |
+| `MIRACAST_PIN` | empty | Miracast PIN. Optional PIN Windows must be given before it can mirror. Empty means anyone in range can. Not supported by every backend. **Secret — never logged.** Restarts: room-miracast. |
+| `MIRACAST_BACKEND` | `auto` | Receiver backend. Which receiver software to drive. “auto” uses whichever is installed. Neither is in the Raspberry Pi OS archive, so one has to be built — see the README. One of: auto, miraclecast, lazycast. Restarts: room-miracast. |
+| `MIRACAST_INFRASTRUCTURE` | `true` | Send the video over the room network. Miracast over Infrastructure: Windows is still found over Wi-Fi Direct, but the picture travels over the ordinary network, which is lower latency and steadier. Turn off only if a laptop will not connect. Restarts: room-miracast. |
+| `MIRACAST_INTERFACE` | empty | Wi-Fi interface for Wi-Fi Direct. Leave empty to use the first wireless interface. Name it in a room with two adapters, so the one carrying the network is not taken over. _Advanced._ Restarts: room-miracast. |
+| `MIRACAST_FREE_RADIO` | `false` | Allow taking the Wi-Fi off the network for Miracast. A Miracast receiver needs a radio not associated with any network. Off, the receiver refuses to start and says so rather than risk the room's connection. On, it disconnects that interface — and only if a wired connection is up, so the room cannot be stranded. _Advanced._ Restarts: room-miracast. |
+| `MIRACAST_LAZYCAST_DIR` | `/opt/lazycast` | lazycast directory. Where lazycast is checked out, if that is the backend. _Advanced._ Restarts: room-miracast. |
+| `MIRACAST_EXTRA_ARGS` | empty | Extra receiver arguments. Appended to the backend's command line for unusual setups. _Advanced._ Restarts: room-miracast. |
+
+## Screen sharing from a PC (browser)
 
 | Option | Default | What it does |
 | --- | --- | --- |
@@ -70,7 +84,7 @@ needs only a calendar link.
 | `CAST_PORT` | `8000` | Sharing address port. The port in the address shown on the TV. Kept separate from the dashboard port on purpose: this one is always open to the room's network and carries only the sharing page, so opening it never exposes the settings or the room controller. (min 1024, max 65535) _Advanced._ |
 | `CAST_SECURE_PORT` | `8443` | Secure sharing port. Where the page that actually captures the screen is served. Browsers only allow screen capture over an encrypted connection, so the room generates its own certificate — which is why a browser warns about it once per laptop. (min 1024, max 65535) _Advanced._ |
 | `CAST_PIN` | empty | Sharing code. Optional code a laptop must type before it can share. Empty means anyone who can reach the room's network can share, which matches how AirPlay behaves by default. **Secret — never logged.** |
-| `CAST_SHOW_ON_TV` | `true` | Show the sharing address on the TV. Off, sharing still works for anyone who knows the address, but the TV stops advertising it. |
+| `CAST_SHOW_ON_TV` | `auto` | Show the sharing address on the TV. “auto” shows it only when Miracast is not working, so a room with Win+K sharing keeps a clean screen and one with a problem still tells people what to do. “always” also suits rooms with Chromebooks or Linux laptops, which have no Miracast. One of: auto, always, never. |
 
 ## Poly conference bar
 

@@ -80,7 +80,7 @@ class TestShellScripts:
 
 class TestSystemdUnits:
     def test_units_were_found(self):
-        assert len(UNIT_FILES) == 7, [p.name for p in UNIT_FILES]
+        assert len(UNIT_FILES) == 8, [p.name for p in UNIT_FILES]
 
     @pytest.mark.parametrize("unit", UNIT_FILES, ids=lambda p: p.name)
     def test_units_parse(self, unit):

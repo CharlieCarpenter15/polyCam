@@ -37,6 +37,7 @@ MANAGED_UNITS = (
     "room-dashboard.service",
     "room-kiosk.service",
     "room-airplay.service",
+    "room-miracast.service",
     "room-remote.service",
     "room-watchdog.timer",
     "room-watchdog.service",

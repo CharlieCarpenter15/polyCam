@@ -2,9 +2,10 @@
 
 Turns a Raspberry Pi 5, a TV and a Poly USB conference bar into a dedicated
 meeting-room system. It boots straight into a room dashboard, shows the room's
-calendar, opens Teams / Google Meet / Zoom meetings by itself, accepts AirPlay
-screen sharing, uses the Poly bar for camera, microphone and speaker, and
-repairs itself when something goes wrong.
+calendar, opens Teams / Google Meet / Zoom meetings by itself, accepts screen
+sharing from a Mac (AirPlay) and from a Windows laptop (Miracast, Win+K), uses
+the Poly bar for camera, microphone and speaker, and repairs itself when
+something goes wrong.
 
 Everything is configured from a web page — on your phone, over the room's
 network. No keyboard, no YAML, no SSH.
@@ -29,7 +30,7 @@ network. No keyboard, no YAML, no SSH.
 │  └────────────────────────────────┘ └──────────────────────┘ │
 │                                                              │
 │  ⧉ Screen Mirroring → Meeting Room     ● Network ● Calendar   │
-│                                        ● Camera  ● Mic       │
+│  ≋ Windows ⌘+K → Meeting Room          ● Camera  ● Mic       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -49,6 +50,8 @@ network. No keyboard, no YAML, no SSH.
 - [Poly remote / controller](#poly-remote--controller)
 - [AirPlay screen sharing](#airplay-screen-sharing)
 - [Screen sharing from a Windows PC](#screen-sharing-from-a-windows-pc)
+  - [Miracast (Win+K)](#miracast-wink)
+  - [The browser fallback](#the-browser-fallback)
 - [Troubleshooting](#troubleshooting)
 - [What is deliberately best-effort](#what-is-deliberately-best-effort)
 - [Architecture](#architecture)
@@ -325,10 +328,11 @@ the room's buttons open on the phone — join, leave, mute, camera, volume. See
 [The room controller](#the-room-controller-scan-the-code).
 
 **Sharing a screen.** Mac or iPhone → Control Centre → Screen Mirroring →
-*Meeting Room*. From a Windows, Linux or Chromebook laptop, open the address the
-TV shows and press one button — see
-[Screen sharing from a Windows PC](#screen-sharing-from-a-windows-pc). Either way
-the dashboard steps aside, and comes back when sharing stops.
+*Meeting Room*. Windows → **Win+K** → *Meeting Room*. Both are the operating
+system's own list, with nothing to install and nothing to type. A Chromebook or
+a Linux laptop uses the browser fallback instead. See
+[Screen sharing from a Windows PC](#screen-sharing-from-a-windows-pc). Whichever
+route, the dashboard steps aside and comes back when sharing stops.
 
 **Nothing scheduled.** The dashboard shows the time, the date, *Available*, and
 how to share a screen.
@@ -651,13 +655,123 @@ needs to feel responsive more than it needs perfectly paced frames.
 
 ## Screen sharing from a Windows PC
 
-Nothing to install, no dongle, no cable. The TV shows an address; the laptop
-opens it and presses one button.
+Two routes. The first is the one you want.
+
+| | How it feels | What it needs |
+| --- | --- | --- |
+| **Miracast** | **Win+K, pick the room. Identical to AirPlay.** | A Wi-Fi radio free for Wi-Fi Direct, and a receiver built from source |
+| **Browser** | Type an address, click Share | Nothing — works on any laptop, including Chromebooks |
+
+Miracast is off by default and the browser fallback is on, because the browser
+one works everywhere and Miracast depends on hardware a given room may not have.
+Turn Miracast on once you know the room can do it, and the TV switches to
+advertising Win+K instead.
+
+---
+
+### Miracast (Win+K)
+
+```
+Windows:  Win+K  →  Meeting Room
+```
+
+That is the whole thing. Windows draws the list, the room is in it, nothing is
+installed and nothing is typed — the same experience as Screen Mirroring on a
+Mac. The dashboard steps aside while mirroring and comes back afterwards.
+
+#### First: can this room do it?
+
+```bash
+./scripts/detect-miracast.sh
+```
+
+Run this **before** turning Miracast on. It reports the Pi model and OS, whether
+the Wi-Fi radio is free, whether its driver will act as a Wi-Fi Direct group
+owner, whether the video decoder is present and which receiver software is
+installed — then gives a verdict and the next step. It changes nothing and is
+safe to run on a room in use.
+
+#### The one hard requirement
+
+**A Miracast receiver announces itself as a Wi-Fi Direct group owner, and a card
+doing that generally cannot also be associated with a normal network.**
+
+This is true even with *Miracast over Infrastructure*, where the video then
+travels over the ordinary network: the announcement is still a Wi-Fi Direct one.
+So one of these has to be true:
+
+| | |
+| --- | --- |
+| **The Pi is on Ethernet** | Its built-in Wi-Fi is then free. The easy case, and why this appliance prefers a wired room anyway |
+| **The Pi has a USB Wi-Fi adapter** | One radio for the network, one for Wi-Fi Direct. A few pounds, and what most Raspberry Pi Miracast builds end up doing |
+| **The driver allows both at once** | Uncommon. The probe reports it if `iw list` says so |
+
+The receiver **refuses to start rather than take the room off its network**. If
+you want it to disconnect the Wi-Fi to make room, set `MIRACAST_FREE_RADIO` —
+and even then it will only do so when a wired connection is up, so a room can
+never be stranded by this feature.
+
+#### Installing a receiver
+
+Neither implementation is in the Raspberry Pi OS archive, so one has to be built.
+The appliance drives either — set `MIRACAST_BACKEND`, or leave it on `auto` and
+whichever is installed gets used.
+
+| Backend | Notes |
+| --- | --- |
+| [MiracleCast](https://github.com/albfan/miraclecast) | The rigorous one. `miracle-wifid` + `miracle-sinkctl`, GStreamer output. Wants its own `wpa_supplicant` and a free radio. Some Pi 5 reports of connections not completing |
+| [lazycast](https://github.com/homeworkc/lazycast) | Simpler to get going and supports Miracast over Infrastructure. Written against Raspberry Pi OS Legacy 32-bit; its built-in players use the old Broadcom GPU stack, so on 64-bit Bookworm or a Pi 5 point it at GStreamer instead |
+
+Adding a third backend is one `case` branch in `scripts/start-miracast.sh` and
+one name in `BACKENDS`. Nothing else in the appliance needs to know.
+
+#### Settings
+
+| Setting | Effect |
+| --- | --- |
+| Enable the Miracast receiver | Off by default. Run the probe first |
+| Miracast name | What appears in the Windows list. Defaults to the room name |
+| Miracast PIN | Optional. Not supported by every backend |
+| Receiver backend | `auto`, `miraclecast` or `lazycast` |
+| Send the video over the room network | Miracast over Infrastructure. On by default: lower latency and steadier, and what Windows 10 and later prefer |
+| Wi-Fi interface | Name it in a room with two adapters, so the one carrying the network is not taken over |
+| Allow taking the Wi-Fi off the network | Off by default, as above |
+
+#### If the room does not appear in Win+K
+
+1. **Run the probe.** `./scripts/detect-miracast.sh` answers most of this, and
+   the dashboard shows the same verdict: control panel → **Checks** →
+   *Miracast (Win+K)*.
+2. **The radio has to be free.** By far the most common cause. The dashboard
+   says so in words rather than leaving the room simply absent from the list.
+3. **A meeting on the TV takes precedence** — mirroring is cleared when a
+   meeting opens, and refused while one is open if
+   `AIRPLAY_INTERRUPTS_MEETING` is off.
+4. Restart it: control panel → **3 · Restart Miracast**, or
+   `./scripts/roomctl restart miracast`.
+5. Read the log: `journalctl --user -u room-miracast -n 100`.
+
+#### Honesty about this one
+
+Everything above the sink is ours and is tested: the supervisor, the session
+tracking, the state machine, the health reporting, the settings. **The sink
+itself is third-party software whose reliability on current Raspberry Pi OS is
+genuinely mixed** — that is why the probe exists, why Miracast is off by
+default, and why the browser fallback stays. If Miracast disappoints on your
+hardware, the room does not lose the ability to take a Windows screen.
+
+---
+
+### The browser fallback
+
+Works on any laptop with a browser, needs no special hardware, and is what the
+TV advertises when Miracast is not available.
 
 ```
         ┌──────────────────────────────────────────┐
         │  ⧉ Screen Mirroring → Meeting Room       │   ← Mac / iPhone / iPad
-        │  ▭ From a PC → 192.168.1.42:8000         │   ← Windows / Linux / Chromebook
+        │  ≋ Windows ⌘+K → Meeting Room            │   ← Windows, when Miracast is on
+        │  ▭ From a PC → 192.168.1.42:8000         │   ← anything else
         └──────────────────────────────────────────┘
 ```
 
@@ -676,7 +790,7 @@ the screen — and the dashboard comes back.
 Steps 1 and 2 are once per laptop: the browser remembers the certificate, and
 the address can be bookmarked straight to the sharing page.
 
-### Why the browser warns you
+#### Why the browser warns you
 
 Browsers only let a page capture the screen over an encrypted connection, and no
 certificate authority will issue a certificate for a private address like
@@ -689,7 +803,7 @@ the familiar "unknown authority" one and never a name mismatch as well. It is
 regenerated if the Pi's address changes and renewed before it expires, so the
 warning never quietly turns into a different warning.
 
-### How it works
+#### How it works
 
 The laptop's browser sends the video **straight to the Chromium on the TV** over
 WebRTC. The Pi is only the introduction service: the laptop leaves an offer, the
@@ -707,17 +821,17 @@ page reloads mid-share — a drift correction, a health restart, someone
 power-cycling the TV — the new page asks the laptop to send again and the picture
 comes back by itself. Nobody has to walk over and press Share twice.
 
-### Settings
+#### Settings
 
 | Setting | Effect |
 | --- | --- |
 | Enable screen sharing from a PC | On by default |
 | Sharing code | Optional code a laptop must type first. Empty means anyone on the room's network can share, which is how AirPlay behaves too |
-| Show the sharing address on the TV | Off, sharing still works for anyone with the address |
+| Show the sharing address on the TV | `auto` shows it only while Miracast is not working. `always` also suits rooms with Chromebooks or Linux laptops, which have no Miracast |
 | Sharing address port | `8000` — the port in the address on the TV |
 | Secure sharing port | `8443` — where the page that captures the screen is served |
 
-### The two ports, and why they are not the dashboard's
+#### The two ports, and why they are not the dashboard's
 
 Sharing has to be reachable by anyone who walks into the room, so its listeners
 are always open to the room's network. The dashboard's port is not: it opens only
@@ -734,7 +848,7 @@ about to appear. It is plain HTTP so that `192.168.1.42:8000` typed with no
 `https://` in front — which is what people type — reaches something rather than
 failing on a TLS handshake. `8443` is where the capture actually happens.
 
-### If it does not appear on the TV
+#### If it does not appear on the TV
 
 1. **The laptop and the room must be on the same network**, and it must let
    devices talk to each other. A guest network with client isolation will not
@@ -747,27 +861,15 @@ failing on a TLS handshake. `8443` is where the capture actually happens.
    answer regardless: the people who are not in the room see it too.
 4. Check the room agrees it is working: control panel → **Checks** →
    *Sharing from a PC*, or `./scripts/roomctl status`.
-5. Restart it: control panel → **3 · Restart PC sharing**, or
+5. Restart it: control panel → **4 · Restart PC sharing**, or
    `./scripts/roomctl restart cast`. It restarts in place, so the calendar and
    the dashboard stay up.
-
-### Why not Miracast
-
-Windows has "Connect to a wireless display" built in, which would need no address
-typed at all. It is not used here: a Miracast sink on a Raspberry Pi needs Wi-Fi
-Direct support that the built-in adapter handles unreliably, and the stack is
-experimental. A flaky Miracast implementation is not worth risking the calendar,
-the join button and AirPlay for.
-
-Typing an address once is a smaller price than a room that sometimes does not
-work — and unlike Miracast, or AirPlay, this path needs no discovery protocol at
-all, so it also works on the networks that block mDNS.
 
 ---
 
 ## Troubleshooting
 
-Start here: **control panel → "If something looks wrong"**. Five numbered
+Start here: **control panel → "If something looks wrong"**. Six numbered
 buttons, safe to press in order. Each takes a few seconds and the room comes
 back on its own.
 
@@ -1026,6 +1128,7 @@ Everything goes to the journal as structured, greppable lines:
 journalctl --user -u room-dashboard -f              # the backend
 journalctl --user -u room-kiosk -n 100              # Chromium
 journalctl --user -u room-airplay -n 100            # AirPlay
+journalctl --user -u room-miracast -n 100           # Miracast (Win+K)
 journalctl --user -u room-dashboard | grep cast\.    # sharing from a PC
 journalctl --user -u room-watchdog -n 50            # the watchdog
 ./scripts/roomctl logs -f                           # all of them together
@@ -1129,9 +1232,12 @@ none needs another to be healthy in order to keep working.
 - **The kiosk is independent of the backend.** If the backend crashes, the TV
   keeps showing the page, which reconnects by itself. If Chromium crashes,
   systemd restarts it without disturbing anything else.
-- **PC sharing runs inside the backend** on two ports of its own, carrying the
-  sharing page and nothing else. It restarts in place (`roomctl restart cast`)
-  without touching the calendar or the dashboard.
+- **Miracast is its own unit**, like AirPlay, and reports sessions to the
+  backend over the same small internal API. Adding a receiver has never needed
+  the dashboard or the calendar to change, which is the point of that seam.
+- **Browser sharing runs inside the backend** on two ports of its own, carrying
+  the sharing page and nothing else. It restarts in place
+  (`roomctl restart cast`) without touching the calendar or the dashboard.
 - **AirPlay is independent of both.** People can still share a screen while the
   room software is restarting.
 - **The remote is a separate process** because reading `/dev/input` needs the
@@ -1151,7 +1257,7 @@ The state machine picks exactly one, in this order of precedence:
 
 | Mode | When | The TV shows |
 | --- | --- | --- |
-| `screen-sharing` | Someone is mirroring, over AirPlay or from a PC | Their screen |
+| `screen-sharing` | Someone is mirroring — AirPlay, Miracast or the browser | Their screen |
 | `meeting` | A meeting page is open | The meeting |
 | `offline` | No network | The dashboard, saying so |
 | `home` | Otherwise | The dashboard |
@@ -1165,6 +1271,8 @@ The state machine picks exactly one, in this order of precedence:
 | Chromium drifts to an unexpected page | Navigated back to the dashboard |
 | UxPlay crashes | The supervisor restarts it and reports the restart |
 | A laptop sharing its screen closes its lid | The session times out and the dashboard comes back |
+| The Miracast sink crashes | The supervisor restarts it and reports the restart |
+| Miracast cannot use the Wi-Fi radio | Reported as a fault on the dashboard, naming the reason; the room is otherwise untouched |
 | The TV's page reloads mid-share | It asks the laptop to send again; the picture returns by itself |
 | Backend crashes | systemd restarts it; the TV reconnects by itself |
 | Backend wedges | The watchdog restarts it from outside |
@@ -1196,7 +1304,8 @@ room-appliance/
 │   ├── cdp.py                  minimal Chrome DevTools Protocol client
 │   ├── poly_service.py         detect and select camera / mic / speaker
 │   ├── airplay_service.py      mirroring state from the UxPlay supervisor
-│   ├── cast_service.py         PC screen sharing: sessions and WebRTC signalling
+│   ├── miracast_service.py     Windows Win+K mirroring state, from its supervisor
+│   ├── cast_service.py         browser screen sharing: sessions and WebRTC signalling
 │   ├── cast_web.py             its two listeners, deliberately separate
 │   ├── tls.py                  the room's own certificate, for the sharing page
 │   ├── remote_service.py       evdev buttons → room actions
@@ -1214,6 +1323,8 @@ room-appliance/
 │   ├── roomctl                 do anything from a terminal
 │   ├── start-kiosk.sh          launch Chromium properly
 │   ├── start-airplay.sh        UxPlay + event supervisor
+│   ├── start-miracast.sh       Miracast sink + event supervisor (either backend)
+│   ├── detect-miracast.sh      can this machine be a Miracast receiver?
 │   ├── detect-poly.sh          conference-bar diagnostics
 │   ├── diagnose-remote.sh      discover remote key codes
 │   ├── watchdog.sh             the external health check
@@ -1285,7 +1396,9 @@ The most useful ones:
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join too |
 | `RETURN_HOME_MINUTES` | `2` | Grace period after a meeting ends |
 | `AIRPLAY_NAME` | *(room name)* | What appears in Screen Mirroring |
-| `CAST_ENABLED` | `true` | Screen sharing from a Windows/Linux/Chromebook laptop |
+| `MIRACAST_ENABLED` | `false` | Windows Win+K mirroring. Needs a free Wi-Fi radio — run `scripts/detect-miracast.sh` |
+| `MIRACAST_NAME` | *(room name)* | What appears in the Windows wireless-display list |
+| `CAST_ENABLED` | `true` | Browser fallback for any laptop, no special hardware |
 | `CAST_PIN` | *(empty)* | Optional code a laptop must type before sharing |
 | `MICROPHONE_DEVICE` / `SPEAKER_DEVICE` / `CAMERA_DEVICE` | `auto` | `auto` finds the Poly bar |
 | `POLY_ANSWER_KEY` etc. | `KEY_ENTER` etc. | Remote button mapping |
@@ -1461,7 +1574,7 @@ A test fails if you forget.
 ./scripts/roomctl doctor              full hardware check
 ./scripts/roomctl panel               the control-panel address and PIN status
 
-./scripts/roomctl restart [what]      browser | airplay | cast | remote | backend | all
+./scripts/roomctl restart [what]      browser | airplay | miracast | cast | remote | backend | all
 ./scripts/roomctl start|stop [what]
 ./scripts/roomctl logs [unit] [-f]
 
@@ -1495,7 +1608,7 @@ Localhost needs no authentication; anything else needs the PIN, and every
 | `POST /api/actions/join` | `{}` for the next meeting, or `{"meeting_id": …}` |
 | `POST /api/actions/leave` · `/home` · `/retry-join` | |
 | `POST /api/actions/volume` · `/mute` | |
-| `POST /api/actions/restart` | `{"target": "browser｜airplay｜cast｜backend｜all"}` |
+| `POST /api/actions/restart` | `{"target": "browser｜airplay｜miracast｜cast｜backend｜all"}` |
 | `POST /api/actions/reboot` · `/reset-safe` | |
 | `GET/POST /api/backgrounds` · `DELETE /api/backgrounds/<name>` | Slideshow images |
 | `GET /api/diagnostics` · `GET /api/logs` | |

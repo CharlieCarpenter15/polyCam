@@ -48,7 +48,8 @@ from .health_service import HealthService
 from .join_flows import PROVIDER_FLOWS
 from .logging_setup import get_logger, log_event, setup_logging
 from .meeting_service import MeetingService
-from .models import MODES
+from .miracast_service import MiracastService
+from .models import MODES, OK
 from .poly_service import PolyService
 from .remote_service import ACTIONS, RemoteService
 from .system_service import MANAGED_UNITS, SystemService
@@ -86,11 +87,12 @@ class RoomAppliance:
         self.browser = BrowserService(config, self.system)
         self.airplay = AirPlayService(config, self.system)
         self.cast = CastService(config)
+        self.miracast = MiracastService(config, self.system)
         self.poly = PolyService(config)
         self.backgrounds = BackgroundService()
         self.room = MeetingService(
             config, self.calendar, self.browser, self.airplay, self.cast,
-            self.poly, self.system,
+            self.miracast, self.poly, self.system,
         )
         self.health = HealthService(
             config,
@@ -98,6 +100,7 @@ class RoomAppliance:
             self.browser,
             self.airplay,
             self.cast,
+            self.miracast,
             self.poly,
             self.room,
             self.system,
@@ -481,7 +484,19 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         general payload, which is what lets the control panel show it to
         somebody who is emailing it to a visitor.
         """
-        hint: dict[str, Any] = {"show_on_tv": config.bool_("CAST_SHOW_ON_TV")}
+        # "auto" is the interesting case: the browser address earns its place on
+        # the TV only when the native path is not doing the job. A room where
+        # Win+K works should not be advertising a URL nobody needs.
+        setting = config.str_("CAST_SHOW_ON_TV")
+        if setting == "always":
+            show = True
+        elif setting == "never":
+            show = False
+        else:
+            miracast = appliance.miracast.status()
+            show = not (miracast.get("enabled") and miracast.get("status") == OK)
+
+        hint: dict[str, Any] = {"show_on_tv": show, "show_rule": setting}
         port = appliance.cast_server.port
         addresses = _lan_addresses()
         # Without the plain-HTTP entry point there is no address worth putting
@@ -709,8 +724,13 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         if not config.bool_("DEV_MODE"):
             return fail("Only available in development mode.", 409)
         payload = request.get_json(silent=True) or {}
-        appliance.airplay.simulate_sharing(bool(payload.get("sharing")))
-        return ok(sharing=appliance.airplay.sharing)
+        sharing = bool(payload.get("sharing"))
+        # Which receiver to pretend with, so both sharing screens can be seen.
+        if str(payload.get("via") or "airplay").lower() == "miracast":
+            appliance.miracast.simulate_sharing(sharing)
+            return ok(sharing=appliance.miracast.sharing, via="miracast")
+        appliance.airplay.simulate_sharing(sharing)
+        return ok(sharing=appliance.airplay.sharing, via="airplay")
 
     # -- screen sharing from a PC: the receiving half --------------------
     #
@@ -799,6 +819,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         targets = {
             "browser": ("room-kiosk.service", "The TV display is restarting."),
             "airplay": ("room-airplay.service", "AirPlay is restarting."),
+            "miracast": ("room-miracast.service", "The Miracast receiver is restarting."),
             "remote": ("room-remote.service", "The remote handler is restarting."),
             "backend": ("room-dashboard.service", "The room software is restarting."),
             # "cast" is handled above: it has no unit of its own.
@@ -824,7 +845,8 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         if target == "all":
             # Order matters: the browser last, so it reloads a healthy backend.
             done = []
-            for unit in ("room-airplay.service", "room-remote.service", "room-kiosk.service"):
+            for unit in ("room-airplay.service", "room-miracast.service",
+                         "room-remote.service", "room-kiosk.service"):
                 if appliance.system.restart(unit, min_interval=2.0, reason="restart everything"):
                     done.append(unit)
             appliance.calendar.refresh_now()
@@ -1031,6 +1053,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
                 "calendar": appliance.calendar.status(),
                 "browser": appliance.browser.status(),
                 "airplay": appliance.airplay.status(),
+                "miracast": appliance.miracast.status(),
                 "cast": {
                     **appliance.cast.status(),
                     "port": appliance.cast_server.port,
@@ -1085,6 +1108,20 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         event = str(payload.get("event") or "")
         client = str(payload.get("client") or "")
         return jsonify(appliance.airplay.handle_event(event, client=client))
+
+    @app.route("/api/internal/miracast", methods=["POST"])
+    @require_internal
+    def api_internal_miracast():
+        """Session events from the Miracast sink supervisor."""
+        payload = request.get_json(silent=True) or {}
+        return jsonify(
+            appliance.miracast.handle_event(
+                str(payload.get("event") or ""),
+                client=str(payload.get("client") or ""),
+                detail=str(payload.get("detail") or ""),
+                backend=str(payload.get("backend") or ""),
+            )
+        )
 
     @app.route("/api/internal/action", methods=["POST"])
     @require_internal

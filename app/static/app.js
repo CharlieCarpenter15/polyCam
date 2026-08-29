@@ -342,10 +342,11 @@
   var INDICATOR_LABELS = {
     network: "Network", calendar: "Calendar", camera: "Camera",
     microphone: "Mic", speaker: "Speaker", airplay: "AirPlay",
-    cast: "PC share", browser: "Display"
+    miracast: "Miracast", cast: "PC share", browser: "Display"
   };
   var INDICATOR_ORDER = [
-    "network", "calendar", "camera", "microphone", "speaker", "airplay", "cast"
+    "network", "calendar", "camera", "microphone", "speaker",
+    "airplay", "miracast", "cast"
   ];
 
   function renderIndicators(payload) {
@@ -377,8 +378,9 @@
       // Either receiver can be the one sharing; whichever it is, the name is
       // what the person in the room recognises.
       var airplayClient = (payload.airplay && payload.airplay.client) || "";
+      var miracastClient = (payload.miracast && payload.miracast.client) || "";
       var castClient = (payload.cast && payload.cast.client) || "";
-      var client = airplayClient || castClient;
+      var client = airplayClient || miracastClient || castClient;
       setText("sharing-client", client ? "Shared from " + client : "");
     }
 
@@ -407,15 +409,28 @@
 
   function renderFooter(payload) {
     var airplay = payload.airplay || {};
+    var miracast = payload.miracast || {};
     var cast = payload.cast || {};
     var display = payload.display || {};
-    setText("airplay-name", airplay.name || payload.room.name || "Meeting Room");
-    show($("sharing"), !!display.show_instructions && airplay.enabled !== false);
+    var instructions = !!display.show_instructions;
 
-    // An address is only sent when a laptop can actually reach it, so its
-    // presence is the whole condition for showing this line.
+    setText("airplay-name", airplay.name || payload.room.name || "Meeting Room");
+    show($("sharing"), instructions && airplay.enabled !== false);
+
+    // Only advertised when the receiver is actually healthy: a room that tells
+    // people to press Win+K when nothing is listening is worse than a room
+    // that says nothing.
+    var miracastReady = !!miracast.enabled && miracast.status === "ok";
+    show($("sharing-miracast"), instructions && miracastReady);
+    if (miracastReady) {
+      setText("miracast-name", miracast.name || payload.room.name || "Meeting Room");
+    }
+
+    // The backend decides whether the browser address earns its place (it
+    // stands down while Miracast is working); an address is only ever sent
+    // when a laptop could actually reach it.
     var castUrl = cast.url || "";
-    var showCast = !!display.show_instructions && !!castUrl && cast.show_on_tv !== false;
+    var showCast = instructions && !!castUrl && cast.show_on_tv !== false;
     show($("sharing-cast"), showCast);
     if (castUrl) setText("cast-url", castUrl);
 

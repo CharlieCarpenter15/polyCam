@@ -112,7 +112,8 @@ GROUPS: tuple[tuple[str, str], ...] = (
     ("calendar", "Calendar"),
     ("meetings", "Meeting joining"),
     ("airplay", "AirPlay screen sharing"),
-    ("cast", "Screen sharing from a PC"),
+    ("miracast", "Miracast (Windows wireless display)"),
+    ("cast", "Screen sharing from a PC (browser)"),
     ("audio", "Poly conference bar"),
     ("remote", "Poly remote / controller"),
     ("controller", "Room controller (phone)"),
@@ -129,7 +130,14 @@ GROUP_HELP: dict[str, str] = {
     "dropped in later without touching the rest of the appliance.",
     "meetings": "How the appliance behaves around meeting start and end times.",
     "airplay": "Wireless screen sharing from a Mac, iPhone or iPad.",
-    "cast": "The other half of wireless sharing: a Windows PC, Chromebook or\n"
+    "miracast": "What Windows calls \u201cConnect to a wireless display\u201d (Win+K):\n"
+    "the room appears in a list the operating system draws, and nothing is\n"
+    "installed or typed on the laptop. The closest thing to AirPlay there is.\n"
+    "Off by default because it needs a Wi-Fi radio free for Wi-Fi Direct and\n"
+    "receiver software that Raspberry Pi OS does not package \u2014 run\n"
+    "scripts/detect-miracast.sh, which says whether this room can.",
+    "cast": "The fallback for when Miracast cannot work: a Windows PC,\n"
+    "Chromebook or\n"
     "Linux laptop opens the address shown on the TV, presses one button and\n"
     "picks a window. Nothing to install. The video goes straight from the\n"
     "laptop to the TV over the room's network, so the Pi only introduces the\n"
@@ -515,7 +523,111 @@ FIELDS: tuple[Field, ...] = (
         "Teams or Meet is better, because remote participants can see it too.",
         advanced=True,
     ),
-    # -- Screen sharing from a PC ------------------------------------------
+    # -- Miracast ----------------------------------------------------------
+    Field(
+        key="MIRACAST_ENABLED",
+        type="bool",
+        default=False,
+        group="miracast",
+        label="Enable the Miracast receiver",
+        help="Lets a Windows laptop mirror with Win+K, picking this room from the "
+        "list Windows draws \u2014 nothing installed, nothing typed. Needs a Wi-Fi "
+        "radio free for Wi-Fi Direct and a receiver backend installed. Run "
+        "scripts/detect-miracast.sh before turning this on; it says whether this "
+        "machine can, and what is missing if not.",
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_NAME",
+        type="str",
+        default="",
+        group="miracast",
+        label="Miracast name",
+        help="What appears in the Windows wireless-display list. Leave empty to "
+        "use the room name.",
+        placeholder="Meeting Room",
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_PIN",
+        type="password",
+        default="",
+        group="miracast",
+        label="Miracast PIN",
+        help="Optional PIN Windows must be given before it can mirror. Empty "
+        "means anyone in range can. Not supported by every backend.",
+        secret=True,
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_BACKEND",
+        type="choice",
+        default="auto",
+        choices=("auto", "miraclecast", "lazycast"),
+        group="miracast",
+        label="Receiver backend",
+        help="Which receiver software to drive. \u201cauto\u201d uses whichever is "
+        "installed. Neither is in the Raspberry Pi OS archive, so one has to be "
+        "built \u2014 see the README.",
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_INFRASTRUCTURE",
+        type="bool",
+        default=True,
+        group="miracast",
+        label="Send the video over the room network",
+        help="Miracast over Infrastructure: Windows is still found over Wi-Fi "
+        "Direct, but the picture travels over the ordinary network, which is "
+        "lower latency and steadier. Turn off only if a laptop will not connect.",
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_INTERFACE",
+        type="str",
+        default="",
+        group="miracast",
+        label="Wi-Fi interface for Wi-Fi Direct",
+        help="Leave empty to use the first wireless interface. Name it in a room "
+        "with two adapters, so the one carrying the network is not taken over.",
+        placeholder="wlan1",
+        advanced=True,
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_FREE_RADIO",
+        type="bool",
+        default=False,
+        group="miracast",
+        label="Allow taking the Wi-Fi off the network for Miracast",
+        help="A Miracast receiver needs a radio not associated with any network. "
+        "Off, the receiver refuses to start and says so rather than risk the "
+        "room's connection. On, it disconnects that interface \u2014 and only if a "
+        "wired connection is up, so the room cannot be stranded.",
+        advanced=True,
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_LAZYCAST_DIR",
+        type="str",
+        default="/opt/lazycast",
+        group="miracast",
+        label="lazycast directory",
+        help="Where lazycast is checked out, if that is the backend.",
+        advanced=True,
+        restart_units=("room-miracast.service",),
+    ),
+    Field(
+        key="MIRACAST_EXTRA_ARGS",
+        type="str",
+        default="",
+        group="miracast",
+        label="Extra receiver arguments",
+        help="Appended to the backend's command line for unusual setups.",
+        advanced=True,
+        restart_units=("room-miracast.service",),
+    ),
+    # -- Screen sharing from a PC (browser fallback) -----------------------
     Field(
         key="CAST_ENABLED",
         type="bool",
@@ -567,12 +679,15 @@ FIELDS: tuple[Field, ...] = (
     ),
     Field(
         key="CAST_SHOW_ON_TV",
-        type="bool",
-        default=True,
+        type="choice",
+        default="auto",
+        choices=("auto", "always", "never"),
         group="cast",
         label="Show the sharing address on the TV",
-        help="Off, sharing still works for anyone who knows the address, but "
-        "the TV stops advertising it.",
+        help="\u201cauto\u201d shows it only when Miracast is not working, so a room "
+        "with Win+K sharing keeps a clean screen and one with a problem still "
+        "tells people what to do. \u201calways\u201d also suits rooms with Chromebooks "
+        "or Linux laptops, which have no Miracast.",
     ),
     # -- Poly conference bar -----------------------------------------------
     Field(

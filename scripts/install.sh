@@ -137,6 +137,8 @@ APT_PACKAGES=(
   # Generates the room's own certificate, which browsers require before they
   # will let a PC share its screen
   openssl
+  # Reading what the Wi-Fi can do, for the Miracast readiness check
+  iw
   # Handy in a kiosk
   unclutter curl jq
 )

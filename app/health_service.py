@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from . import paths
 from .airplay_service import AirPlayService
 from .cast_service import CastService
+from .miracast_service import MiracastService
 from .browser_service import BrowserService
 from .calendar_service import CalendarService
 from .config import ConfigManager
@@ -55,6 +56,7 @@ class HealthService:
         browser: BrowserService,
         airplay: AirPlayService,
         cast: CastService,
+        miracast: MiracastService,
         poly: PolyService,
         room: MeetingService,
         system: SystemService,
@@ -64,6 +66,7 @@ class HealthService:
         self.browser = browser
         self.airplay = airplay
         self.cast = cast
+        self.miracast = miracast
         self.poly = poly
         self.room = room
         self.system = system
@@ -238,6 +241,7 @@ class HealthService:
         browser = self.browser.status()
         airplay = self.airplay.status()
         cast = self.cast.status()
+        miracast = self.miracast.status()
         poly = self.poly.status()
         mode = self.room.mode
 
@@ -253,6 +257,7 @@ class HealthService:
             "calendar": calendar_status,
             "browser": browser_status,
             "airplay": airplay.get("status", UNKNOWN),
+            "miracast": miracast.get("status", UNKNOWN),
             "cast": cast.get("status", UNKNOWN),
             "camera": (poly.get("camera") or {}).get("status", UNKNOWN),
             "microphone": (poly.get("microphone") or {}).get("status", UNKNOWN),
@@ -286,6 +291,7 @@ class HealthService:
             "calendar": calendar,
             "browser": browser,
             "airplay": airplay,
+            "miracast": miracast,
             "cast": cast,
             "poly": poly,
             "network": {

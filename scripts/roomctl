@@ -13,7 +13,7 @@
 #   roomctl slow-device on|off         retune for a Pi 3 / older hardware
 #   roomctl port [N|auto]              show / set / auto-pick the dashboard port
 #   roomctl doctor                     run every hardware check
-#   roomctl restart [what]             browser | airplay | cast | remote | backend | all
+#   roomctl restart [what]             browser | airplay | miracast | cast | remote | backend | all
 #   roomctl start|stop [what]
 #   roomctl logs [unit] [-f]           recent logs, optionally follow
 #   roomctl config                     show every setting
@@ -36,7 +36,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib-room.sh
 . "$HERE/lib-room.sh"
 
-UNITS=(room-dashboard.service room-kiosk.service room-airplay.service
+UNITS=(room-dashboard.service room-kiosk.service room-airplay.service room-miracast.service
        room-remote.service room-watchdog.timer)
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -57,6 +57,7 @@ resolve_unit() {
   case "$1" in
     browser | kiosk | chromium | display | tv) printf 'room-kiosk.service' ;;
     airplay | uxplay | sharing)                printf 'room-airplay.service' ;;
+    miracast | wireless-display | wink)         printf 'room-miracast.service' ;;
     remote | controller)                       printf 'room-remote.service' ;;
     backend | dashboard | app | software)      printf 'room-dashboard.service' ;;
     watchdog)                                  printf 'room-watchdog.timer' ;;
@@ -400,7 +401,8 @@ cmd_units() {
 
   if [ "$what" = "all" ]; then
     # Order matters on restart: backend first so the browser reloads a live app.
-    for unit in room-dashboard.service room-airplay.service room-remote.service room-kiosk.service; do
+    for unit in room-dashboard.service room-airplay.service room-miracast.service \
+                room-remote.service room-kiosk.service; do
       printf '  %s %s… ' "$action" "$unit"
       if systemctl --user "$action" "$unit" 2>/dev/null; then green "ok"; else red "failed"; fi
     done
@@ -425,7 +427,7 @@ cmd_units() {
   unit="$(resolve_unit "$what" || true)"
   if [ -z "$unit" ]; then
     red "Unknown target '$what'."
-    dim "Use: browser | airplay | cast | remote | backend | watchdog | all"
+    dim "Use: browser | airplay | miracast | cast | remote | backend | watchdog | all"
     exit 1
   fi
   printf '  %s %s… ' "$action" "$unit"
