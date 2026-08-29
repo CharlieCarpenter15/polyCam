@@ -145,6 +145,33 @@ class TestSystemdUnits:
         parser.read(ROOT / "systemd" / "room-watchdog.timer", encoding="utf-8")
         assert parser.get("Timer", "Unit", fallback="") == "room-watchdog.service"
 
+    def test_every_startable_unit_is_enabled_at_install(self):
+        """A unit the installer copies but never enables works when started by
+        hand and then silently fails to come back after a reboot — a bug that
+        surfaces weeks later and looks like something else entirely.
+
+        Units with no ``[Install]`` section are started by something else (the
+        watchdog service, by its timer) and are correctly absent.
+        """
+        installer = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+        for unit in UNIT_FILES:
+            if "[Install]" not in unit.read_text(encoding="utf-8"):
+                continue
+            assert unit.name in installer, (
+                f"{unit.name} has an [Install] section but scripts/install.sh "
+                f"never enables it, so it will not start at boot"
+            )
+
+    def test_an_update_enables_units_it_introduces(self):
+        """The same trap by the other route: most rooms upgrade by pulling, and
+        the update script copies units without enabling them unless it is told
+        to."""
+        updater = (ROOT / "scripts" / "update-on-boot.sh").read_text(encoding="utf-8")
+        assert "systemctl --user enable" in updater, (
+            "update-on-boot.sh refreshes unit files; a unit added by an update "
+            "must also be enabled or the feature dies at the next reboot"
+        )
+
     def test_every_managed_unit_is_shipped(self):
         from app.system_service import MANAGED_UNITS
 

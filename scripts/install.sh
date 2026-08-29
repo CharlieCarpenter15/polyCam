@@ -379,9 +379,13 @@ if command -v systemctl >/dev/null 2>&1; then
      sudo loginctl enable-linger $ROOM_USER"
   fi
 
+  # room-miracast.service is enabled even though Miracast is off by default:
+  # its supervisor sleeps when MIRACAST_ENABLED is false, exactly as the AirPlay
+  # one does. Enabling it here is what makes turning Miracast on later survive a
+  # reboot, rather than working until the room is next power-cycled.
   if systemctl --user enable room-dashboard.service room-kiosk.service \
-       room-airplay.service room-remote.service room-watchdog.timer \
-       room-update.service >/dev/null 2>&1; then
+       room-airplay.service room-miracast.service room-remote.service \
+       room-watchdog.timer room-update.service >/dev/null 2>&1; then
     good "enabled all services at boot"
   else
     warn "Some services could not be enabled; check: systemctl --user status"

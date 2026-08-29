@@ -162,12 +162,34 @@ if printf '%s\n' "$CHANGED" | grep -q '^systemd/'; then
   UNIT_DIR="$HOME/.config/systemd/user"
   if command -v systemctl >/dev/null 2>&1 && [ -d "$UNIT_DIR" ]; then
     room_log "update.refreshing_units"
+    NEW_UNITS=()
     for unit_file in "$ROOT"/systemd/*.service "$ROOT"/systemd/*.timer; do
       [ -f "$unit_file" ] || continue
+      unit_name="$(basename "$unit_file")"
+      # A unit this room has never seen is one the update introduced. Noted
+      # before it is written, because afterwards it looks like all the others.
+      # Units without an [Install] section are started by something else (the
+      # watchdog service, by its timer) and cannot be enabled.
+      if [ ! -e "$UNIT_DIR/$unit_name" ] && grep -q '^\[Install\]' "$unit_file"; then
+        NEW_UNITS+=("$unit_name")
+      fi
       sed -e "s|__ROOM_DIR__|$ROOT|g" -e "s|__ROOM_USER__|${USER:-$(id -un)}|g" \
-        "$unit_file" > "$UNIT_DIR/$(basename "$unit_file")" 2>/dev/null || true
+        "$unit_file" > "$UNIT_DIR/$unit_name" 2>/dev/null || true
     done
     systemctl --user daemon-reload 2>/dev/null || true
+
+    # Copying a unit only makes it available. Without this, a feature added by
+    # an update would work when started by hand and then silently fail to come
+    # back after the next reboot — the worst kind of bug, because it appears
+    # weeks later and looks like something else. Only units that were missing
+    # are touched: one an operator deliberately disabled must stay disabled.
+    for unit_name in ${NEW_UNITS+"${NEW_UNITS[@]}"}; do
+      if systemctl --user enable "$unit_name" >/dev/null 2>&1; then
+        room_log "update.unit_enabled" "unit=$unit_name"
+      else
+        room_log "update.unit_enable_failed" "unit=$unit_name"
+      fi
+    done
   fi
 fi
 
