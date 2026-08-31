@@ -323,3 +323,96 @@ class TestInternalEvent:
 
         health = client.get("/api/health").get_json()
         assert NO_AVAHI in health["airplay"]["detail"]
+
+
+# --------------------------------------------------------------------------
+# roomctl airplay
+# --------------------------------------------------------------------------
+
+ROOMCTL = ROOT / "scripts" / "roomctl"
+
+#: A Pi whose receiver is healthy and advertised. Each stub stands in for the
+#: one real thing the check consults, so the verdict can be driven from here.
+STUBS = {
+    "ip": """#!/usr/bin/env bash
+case "$*" in
+  *"route show default"*) echo "default via 192.168.1.1 dev eth0 proto dhcp" ;;
+  *"addr show scope global"*) echo "2: eth0    inet 192.168.1.50/24 brd 192.168.1.255 scope global eth0" ;;
+esac
+""",
+    "uxplay": "#!/usr/bin/env bash\nexit 0\n",
+    "systemctl": """#!/usr/bin/env bash
+case "$*" in
+  *"is-active avahi-daemon"*) echo active ;;
+  *"--user is-active room-airplay.service"*) echo active ;;
+  *) echo unknown; exit 3 ;;
+esac
+""",
+}
+
+ADVERTISED = """#!/usr/bin/env bash
+case "$*" in
+  *_airplay._tcp*) echo "+;eth0;IPv4;Test\\032Room;_airplay._tcp;local" ;;
+  *-atp*)
+%s
+esac
+"""
+WITH_NEIGHBOURS = ADVERTISED % (
+    '    echo "+;eth0;IPv4;Test\\032Room;_airplay._tcp;local"\n'
+    '    echo "+;eth0;IPv4;Apple\\032TV;_airplay._tcp;local" ;;'
+)
+ALONE = ADVERTISED % '    echo "+;eth0;IPv4;Test\\032Room;_airplay._tcp;local" ;;'
+
+
+def run_roomctl_airplay(tmp_path, room_dirs, avahi_browse):
+    """Run `roomctl airplay` against a stubbed-out Pi."""
+    import os
+    import stat
+
+    bin_dir = tmp_path / "stub"
+    bin_dir.mkdir(exist_ok=True)
+    for stub, body in {**STUBS, "avahi-browse": avahi_browse}.items():
+        path = bin_dir / stub
+        path.write_text(body)
+        path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+    (room_dirs["config"] / "config.yaml").write_text(
+        "ROOM_NAME: Test Room\nAIRPLAY_ENABLED: true\nDEV_MODE: false\n"
+    )
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    result = subprocess.run(
+        ["bash", str(ROOMCTL), "airplay"],
+        capture_output=True, text=True, timeout=120, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+class TestRoomctlAirplay:
+    def test_the_command_is_listed_in_the_help(self):
+        result = subprocess.run(
+            ["bash", str(ROOMCTL), "help"], capture_output=True, text=True, timeout=60
+        )
+        assert "roomctl airplay" in result.stdout
+
+    def test_a_healthy_pi_points_at_the_network(self, tmp_path, room_dirs):
+        """Everything on the Pi is right, so the phone is the one not hearing it."""
+        out = run_roomctl_airplay(tmp_path, room_dirs, WITH_NEIGHBOURS)
+        assert "advertising correctly" in out
+        assert "192.168.1.50/24" in out
+        assert "subnets or VLANs" in out
+
+    def test_a_pi_alone_on_its_segment_says_so(self, tmp_path, room_dirs):
+        """Seeing nobody else is the strongest hint that the Pi is walled off."""
+        out = run_roomctl_airplay(tmp_path, room_dirs, ALONE)
+        assert "can see no other device" in out
+        assert "mDNS reflection" in out
+
+    def test_a_receiver_that_is_not_advertised_blames_the_pi(self, tmp_path, room_dirs):
+        """Nothing on the wire means the fault is here, not out on the network."""
+        nothing = "#!/usr/bin/env bash\nexit 0\n"
+        out = run_roomctl_airplay(tmp_path, room_dirs, nothing)
+        assert "including this one" in out
+        assert "fault is on this Pi" in out

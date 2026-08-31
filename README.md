@@ -638,15 +638,26 @@ needs to feel responsive more than it needs perfectly paced frames.
 
 **If the room does not appear in Screen Mirroring**
 
-1. Open **Diagnostics** and read the AirPlay line. A receiver that cannot start
-   says why there — `Could not initialize dnssd library` is avahi-daemon not
-   running, which is the usual cause. UxPlay exits rather than carrying on when
-   it cannot register with mDNS, so nothing is advertised at all.
-2. Check discovery is running: `systemctl is-active avahi-daemon`
-3. The device must be on the same network as the Pi. AirPlay discovery uses
-   mDNS, which most guest and "client isolation" Wi-Fi networks block.
-4. Restart it: control panel → **2 · Restart AirPlay**
-5. The whole story: `journalctl --user -u room-airplay -n 100`
+Run `./scripts/roomctl airplay`. It walks the whole chain — enabled, installed,
+running, avahi up, actually advertised on the wire — and then says which side
+the fault is on, because the two sides need opposite fixes:
+
+- **The fault is on this Pi.** Fix the ✗ lines. A receiver that cannot start
+  says why: `Could not initialize dnssd library` is avahi-daemon not running,
+  which is the usual cause. UxPlay exits rather than carrying on when it cannot
+  register with mDNS, so nothing is advertised at all.
+  `sudo systemctl enable --now avahi-daemon`
+- **The Pi is advertising correctly.** Then the phone is not receiving it, and
+  restarting the room will not help. AirPlay discovery is mDNS — link-local
+  multicast — so it does not cross subnets or VLANs. Compare the phone's IP
+  address with the subnet the check prints; plenty of offices put Wi-Fi on a
+  different one from the wired network. Either move the Pi onto the same
+  network as the phones, or turn on mDNS reflection on the router (UniFi calls
+  it "Multicast DNS", pfSense "Avahi", MikroTik "mDNS repeater"). Also check
+  the Wi-Fi for client / AP isolation, which blocks it within a single subnet.
+
+The whole story is in `roomctl logs airplay`, and `roomctl doctor` runs this
+check along with everything else.
 
 ---
 

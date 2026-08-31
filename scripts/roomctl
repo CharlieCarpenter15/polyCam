@@ -8,6 +8,7 @@
 #
 #   roomctl status                     how is the room?
 #   roomctl screen                     why is the TV blank / white / wrong?
+#   roomctl airplay                    why is the room not in Screen Mirroring?
 #   roomctl performance [auto|high|balanced|low]
 #                                      how hard to push this machine
 #   roomctl slow-device on|off         retune for a Pi 3 / older hardware
@@ -44,6 +45,8 @@ dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
 red()  { printf '\033[31m%s\033[0m\n' "$*"; }
 green(){ printf '\033[32m%s\033[0m\n' "$*"; }
 good() { printf '  \033[32m\xe2\x9c\x93\033[0m %s\n' "$*"; }
+bad()  { printf '  \033[31m\xe2\x9c\x97\033[0m %s\n' "$*"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 
 usage() { sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -735,12 +738,166 @@ cmd_slow_device() {
   esac
 }
 
+# --------------------------------------------------- airplay discovery check
+
+# "The room does not appear in Screen Mirroring" has two causes that need
+# opposite fixes, and from the sofa they look identical: either this Pi is not
+# advertising a receiver, or it is and the network is not carrying the
+# announcement to the phone. This walks the chain and says which.
+#
+# The last link is the one nothing else here could see. AirPlay discovery is
+# mDNS — link-local multicast — so it does not cross subnets or VLANs, and
+# plenty of offices put Wi-Fi on a different one from the wired network. A Pi in
+# that situation is working perfectly and is still invisible, and no amount of
+# restarting it will help.
+cmd_airplay() {
+  room_load_config || true
+
+  local name enabled
+  name="$(room_config AIRPLAY_NAME '')"
+  [ -n "$name" ] || name="$(room_config ROOM_NAME 'Meeting Room')"
+  enabled="$(room_config AIRPLAY_ENABLED true)"
+
+  local pi_faults=0 advertised=0
+
+  bold "This Pi"
+
+  if room_is_true "$enabled"; then
+    good "AirPlay is enabled"
+  else
+    bad "AirPlay is switched off — roomctl set AIRPLAY_ENABLED true"
+    pi_faults=$((pi_faults + 1))
+  fi
+
+  if command -v uxplay >/dev/null 2>&1; then
+    good "uxplay installed         $(command -v uxplay)"
+  else
+    bad "uxplay is not installed — run scripts/install.sh"
+    pi_faults=$((pi_faults + 1))
+  fi
+
+  local unit_state
+  unit_state="$(systemctl --user is-active room-airplay.service 2>/dev/null || true)"
+  if [ "$unit_state" = "active" ]; then
+    good "room-airplay.service     active"
+  else
+    bad "room-airplay.service     ${unit_state:-not installed}"
+    pi_faults=$((pi_faults + 1))
+  fi
+
+  # UxPlay does not soldier on without mDNS: it prints why and exits, so a Pi
+  # without avahi runs a receiver that dies every few seconds and advertises
+  # nothing at all.
+  local avahi_state
+  avahi_state="$(systemctl is-active avahi-daemon 2>/dev/null || true)"
+  if [ "$avahi_state" = "active" ]; then
+    good "avahi-daemon             active"
+  else
+    bad "avahi-daemon             ${avahi_state:-not installed}"
+    dim "      sudo systemctl enable --now avahi-daemon"
+    pi_faults=$((pi_faults + 1))
+  fi
+
+  # Whatever the units claim, this is the question that matters: is the
+  # receiver actually on the wire?
+  if command -v avahi-browse >/dev/null 2>&1; then
+    local receivers
+    receivers="$(timeout 8 avahi-browse -tp _airplay._tcp 2>/dev/null |
+      awk -F';' '/^\+/ {print $4}' | sed 's/\\032/ /g' | sort -u)"
+    if printf '%s\n' "$receivers" | grep -qxF "$name"; then
+      good "advertised as            $name"
+      advertised=1
+    elif [ -n "$receivers" ]; then
+      bad "this room is not being advertised (looking for: $name)"
+      dim "      other receivers on this network: $(printf '%s' "$receivers" | paste -sd', ')"
+      pi_faults=$((pi_faults + 1))
+    else
+      bad "no AirPlay receiver is being advertised, including this one"
+      pi_faults=$((pi_faults + 1))
+    fi
+  else
+    warn "avahi-browse not installed — sudo apt install avahi-utils"
+  fi
+
+  # The reason UxPlay gave the last time it gave up, if it has.
+  local last_error
+  last_error="$(journalctl --user -u room-airplay -n 300 --no-pager 2>/dev/null |
+    grep -o 'reason=.*' | grep -v 'reason=none reported' | tail -1)"
+  [ -n "$last_error" ] && dim "      last failure: ${last_error#reason=}"
+
+  printf '\n'
+  bold "This network"
+
+  local addresses="" route_iface=""
+  if command -v ip >/dev/null 2>&1; then
+    route_iface="$(ip route show default 2>/dev/null |
+      awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}')"
+    addresses="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2, $4}')"
+  fi
+
+  if [ -n "$addresses" ]; then
+    local iface cidr kind marker
+    while read -r iface cidr; do
+      [ -n "$iface" ] || continue
+      if [ -d "/sys/class/net/$iface/wireless" ]; then kind="Wi-Fi"; else kind="wired"; fi
+      if [ "$iface" = "$route_iface" ]; then marker="<- the room is on this one"; else marker=""; fi
+      printf '  %-10s %-20s %-7s %s\n' "$iface" "$cidr" "$kind" "$marker"
+    done <<< "$addresses"
+    dim "  The phone has to be inside that subnet. Compare it with"
+    dim "  Settings > Wi-Fi > (i) > IP Address on the phone itself."
+  elif command -v ip >/dev/null 2>&1; then
+    bad "this Pi has no network address"
+  else
+    warn "iproute2 is missing, so the addresses cannot be listed"
+    dim "      sudo apt install iproute2"
+  fi
+
+  # If this Pi can see nobody else's mDNS it is on a segment of its own, which
+  # is exactly what a phone on the other side of the boundary experiences.
+  # -1 means "could not look", which is not the same as "looked and saw none".
+  local neighbours=-1
+  if command -v avahi-browse >/dev/null 2>&1; then
+    neighbours="$(timeout 8 avahi-browse -atp 2>/dev/null |
+      awk -F';' '/^\+/ {print $4}' | sed 's/\\032/ /g' | sort -u |
+      grep -vxF "$name" | grep -c . || true)"
+    printf '  %-10s %s\n' "neighbours" \
+      "$neighbours other mDNS name(s) visible from here"
+  fi
+
+  printf '\n'
+  bold "Verdict"
+
+  if [ "$pi_faults" -gt 0 ]; then
+    red "  The fault is on this Pi — fix the ✗ lines above, then run this again."
+    dim "  Full story:  roomctl logs airplay"
+  elif [ "$advertised" -eq 1 ] && [ "$neighbours" -eq 0 ]; then
+    printf '  \033[33m%s\033[0m\n' \
+      "This Pi is advertising correctly but can see no other device."
+    dim "  That is a network segment with nothing else on it. If the phones are"
+    dim "  elsewhere, they cannot receive the announcement: mDNS does not cross"
+    dim "  subnets or VLANs. Put the Pi on the same network as the phones, or"
+    dim "  turn on mDNS reflection on the router."
+  elif [ "$advertised" -eq 1 ]; then
+    green "  This Pi is advertising correctly, as: $name"
+    dim "  If the room still does not appear, the phone is not receiving it."
+    dim "  Compare the phone's IP address with the subnet above — if they differ,"
+    dim "  mDNS cannot reach it (it does not cross subnets or VLANs). Also check"
+    dim "  the Wi-Fi for client / AP isolation, which blocks it within one subnet."
+  else
+    red "  The receiver is not on the network."
+    dim "  Full story:  roomctl logs airplay"
+  fi
+}
+
 cmd_doctor() {
-  bold "1/3  Conference bar"
+  bold "1/4  Conference bar"
   "$HERE/detect-poly.sh" || true
-  bold "2/3  Remote / controller"
+  bold "2/4  Remote / controller"
   "$HERE/diagnose-remote.sh" --list || true
-  bold "3/3  Room status"
+  bold "3/4  AirPlay discovery"
+  cmd_airplay
+  printf '\n'
+  bold "4/4  Room status"
   cmd_status
 }
 
@@ -788,6 +945,7 @@ shift || true
 case "$COMMAND" in
   status | st)       cmd_status ;;
   screen | tv)       cmd_screen ;;
+  airplay | mirroring | sharing) cmd_airplay ;;
   panel | url)       cmd_panel ;;
   qr | code)         cmd_qr "$@" ;;
   port)              cmd_port "$@" ;;
