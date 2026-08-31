@@ -237,6 +237,12 @@
 
     if (active || payload.mode === "meeting") {
       var join = automation(payload);
+      // Past its booked end: the room stays in it on purpose, so say so
+      // rather than leave people wondering why the TV has not moved on.
+      var over = !!(active && active.running_over);
+      var bookedUntil = active && active.scheduled_end
+        ? "Booked until " + clockTime(active.scheduled_end) + (over ? " — running over" : "")
+        : "";
 
       // On the meeting page but not in the call: from a chair in the room
       // that looks like the room having joined, so the one button on this
@@ -250,25 +256,23 @@
         result.disabled = false;
         result.meetingId = active.id || "";
         result.label = "Try joining again";
-        result.note = active.scheduled_end
-          ? "Booked until " + clockTime(active.scheduled_end)
-          : "";
+        result.note = bookedUntil;
         return result;
       }
 
-      result.headline = "In a meeting";
+      result.headline = over ? "Still in a meeting" : "In a meeting";
       result.hint = join.waiting
         ? (active ? titleOf(active) : "The meeting") + " is on the TV and the " +
           "room is waiting to be let in. It joins the moment the host admits it."
-        : (active ? titleOf(active) : "A meeting") +
-          " is on the TV. Tap Leave when you are done, so the room is free for " +
-          "whoever is in here next.";
+        : (active ? titleOf(active) : "A meeting") + " is on the TV. " + (over
+            ? "It is past its booked end, so the room is staying in it until " +
+              "someone taps Leave."
+            : "Tap Leave when you are done, so the room is free for whoever is " +
+              "in here next.");
       result.kind = "leave";
       result.label = "Leave the meeting";
       result.disabled = false;
-      if (active && active.scheduled_end) {
-        result.note = "Booked until " + clockTime(active.scheduled_end);
-      }
+      result.note = bookedUntil;
       return result;
     }
 

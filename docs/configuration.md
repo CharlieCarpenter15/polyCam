@@ -10,7 +10,7 @@ An environment variable of the same name — in `.env` or the real
 environment — overrides both, and the Settings page shows such an option as
 read-only so the two can never disagree.
 
-There are 89 options. All have working defaults; a fresh install
+There are 90 options. All have working defaults; a fresh install
 needs only a calendar link.
 
 ## Room
@@ -46,8 +46,9 @@ needs only a calendar link.
 | `JOIN_SETTLE_SECONDS` | `0.0` | Wait before pressing anything (seconds). 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower hardware: pressing buttons on a page that has not finished drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40. (min 0, max 120) _Advanced._ |
 | `AUTO_JOIN_TIMEOUT_SECONDS` | `90` | Give up on auto-join after (seconds). (min 10, max 600) _Advanced._ |
 | `JOIN_REPEAT_GUARD_SECONDS` | `25.0` | Do not press the same button twice within (seconds). A slow meeting page can look unchanged for several seconds after Join is pressed. Without this guard the room presses it again, and again, which looks like the meeting being opened several times over. (min 0, max 300) _Advanced._ |
-| `RETURN_HOME_MINUTES` | `2.0` | Return to dashboard after (minutes). Grace period after a meeting's scheduled end before the TV goes back to the room screen. (min 0, max 120) |
-| `MAX_MEETING_MINUTES` | `240` | Hard limit on a meeting screen (minutes). Safety net: the appliance never stays on a meeting page longer than this, even if the calendar goes strange. (min 10, max 1440) _Advanced._ |
+| `RETURN_HOME_MINUTES` | `2.0` | Return to dashboard after (minutes). Grace period after a meeting's scheduled end before the TV goes back to the room screen. While “Stay in a meeting that runs over” is on, a meeting still in a call waits for the call to end as well. (min 0, max 120) |
+| `STAY_UNTIL_HANGUP` | `true` | Stay in a meeting that runs over. A meeting that runs past its scheduled end stays on the TV until someone presses Leave — on the TV, on a phone, or the red button on the remote. The room still tidies itself up once the meeting page is no longer in a call. Switch this off to return to the dashboard on the clock, the moment the grace period above is up. |
+| `MAX_MEETING_MINUTES` | `240` | Hard limit on a meeting screen (minutes). Safety net: the appliance never stays on a meeting page longer than this, even if the calendar goes strange. With “Stay in a meeting that runs over” on, a call that is demonstrably still up outlasts the limit; a meeting page nobody is in does not. (min 10, max 1440) _Advanced._ |
 | `JOIN_BUTTON_TEXTS` | `Continue on this browser, Use the web app instead, Continue in this browser … (+7)` | Buttons the auto-join may press. One per line, matched case-insensitively against on-screen button text. Update this list if a provider renames a button — no code change needed. _Advanced._ |
 | `JOIN_DISPLAY_NAME` | empty | Guest display name. Name typed into “your name” boxes when the room joins as a guest. Leave empty to use the room name. _Advanced._ |
 | `JOIN_MUTE_ON_ENTRY` | `false` | Join muted. Ask the meeting page to mute the room's microphone on entry. _Advanced._ |

@@ -54,7 +54,8 @@
     show(note, !!active);
     if (active) {
       note.textContent = "On screen: " + (active.title || "meeting") +
-        (active.opened_manually ? " (opened by hand)" : " (opened automatically)");
+        (active.opened_manually ? " (opened by hand)" : " (opened automatically)") +
+        (active.running_over ? " · running over its booked end" : "");
     }
 
     var joinButton = $("join-now");

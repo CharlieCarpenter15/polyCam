@@ -322,10 +322,19 @@ green button on a Poly remote. Use it whenever automatic joining did not get
 all the way in: pressing it while the meeting page is already up does not
 reload anything, it has another go at the buttons on the page in front of it.
 
-**A meeting ends.** Two minutes after the scheduled end time (configurable) the
-TV returns to the dashboard by itself. There is also a hard limit — by default
-four hours — so the room can never be stuck on a stale meeting screen even if
-the calendar says something strange.
+**A meeting ends.** The room waits for the people in it, not for the clock. A
+conversation that overruns its booking keeps the meeting on the TV — nobody is
+hung up on mid-sentence because the calendar said half an hour. The TV goes back
+to the dashboard when someone presses **Leave** (on the TV, on a phone, or the
+remote's red button), or by itself once the meeting page is no longer in a call:
+within about fifteen seconds of the last person hanging up, and never before the
+booked end plus the grace period (`RETURN_HOME_MINUTES`, two minutes). A meeting
+page nobody is in is cleared at the hard limit — four hours by default — so the
+room can never be stuck on a finished meeting.
+
+Rooms that would rather have the TV back on time can switch `STAY_UNTIL_HANGUP`
+off in Settings: then the scheduled end plus the grace period ends the meeting,
+whoever is still talking.
 
 **From a phone.** Scan the small code in the bottom-right corner of the TV and
 the room's buttons open on the phone — join, leave, mute, camera, volume. See
@@ -923,9 +932,14 @@ control panel → **1 · Restart the TV display**.
 
 ### The room is on a meeting screen it should have left
 
-It will leave by itself — at the scheduled end plus the grace period, or at the
-hard limit at the latest. To force it now: control panel → **Show dashboard**,
-or the remote's red button.
+By default the room stays in a meeting that has run over until somebody leaves
+it, so a meeting page that is still in a call is waiting for a person. Press
+**Leave** on the phone controller, the remote's red button, or control panel →
+**Show dashboard**.
+
+If the call itself has ended, the room clears the page by itself within a minute
+or so, and at the hard limit at the latest. A room that should always return on
+the clock instead wants `STAY_UNTIL_HANGUP` switched off in Settings.
 
 ### Everything is broken
 
@@ -1095,7 +1109,8 @@ The state machine picks exactly one, in this order of precedence:
 | Calendar unreachable at boot | Meetings restored from the on-disk cache |
 | `config.yaml` is corrupt | Falls back to `config.yaml.bak`, then to defaults; the room always starts |
 | A setting is out of range | Reset to its default, reported on the dashboard |
-| A meeting screen gets stuck | Left at the scheduled end + grace, or at the hard limit |
+| A meeting screen gets stuck | Cleared once the page is no longer in a call, or at the hard limit |
+| A meeting runs over its booking | Kept on the TV: the room waits for someone to leave |
 | Nothing works for ~10 minutes | The watchdog reboots the Pi (at most once an hour) |
 
 Every one of these is covered by a test in `tests/`.
@@ -1203,6 +1218,7 @@ The most useful ones:
 | `AUTO_OPEN_MINUTES` | `1` | How early, when automatic |
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join too |
 | `RETURN_HOME_MINUTES` | `2` | Grace period after a meeting ends |
+| `STAY_UNTIL_HANGUP` | `true` | Stay in a meeting that runs over, until someone leaves it |
 | `AIRPLAY_NAME` | *(room name)* | What appears in Screen Mirroring |
 | `MICROPHONE_DEVICE` / `SPEAKER_DEVICE` / `CAMERA_DEVICE` | `auto` | `auto` finds the Poly bar |
 | `POLY_ANSWER_KEY` etc. | `KEY_ENTER` etc. | Remote button mapping |

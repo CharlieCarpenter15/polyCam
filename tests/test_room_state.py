@@ -9,7 +9,7 @@ import pytest
 from app.airplay_service import AirPlayService
 from app.browser_service import BrowserService
 from app.calendar_service import CalendarService
-from app.meeting_service import REMOTE_ACTION_TTL_SECONDS, MeetingService
+from app.meeting_service import CALL_GONE_CHECKS, REMOTE_ACTION_TTL_SECONDS, MeetingService
 from app.models import MODE_HOME, MODE_MEETING, MODE_OFFLINE, MODE_SHARING, Meeting
 from app.poly_service import PolyService
 from app.system_service import SystemService
@@ -26,6 +26,10 @@ class FakeBrowser:
         self.retried = 0
         self.fronted = 0
         self.fail_open = False
+        # What the meeting page would say if asked: True (a call is up), False
+        # (nobody is in it) or None (the page cannot be read).
+        self.call_up: bool | None = True
+        self.call_probes = 0
 
     def open_meeting(self, meeting, *, reason=""):
         if self.fail_open:
@@ -44,6 +48,10 @@ class FakeBrowser:
     def bring_to_front(self):
         self.fronted += 1
         return True
+
+    def in_call(self):
+        self.call_probes += 1
+        return self.call_up
 
     def retry_join(self):
         self.retried += 1
@@ -94,6 +102,16 @@ def set_meetings(calendar, meetings):
     calendar._snapshot.ok = True
     calendar._snapshot.stale = False
     calendar._snapshot.fetched_at = datetime.now(timezone.utc)
+
+
+def leaves_on_the_clock(room):
+    """Opt out of STAY_UNTIL_HANGUP: the schedule alone ends the meeting.
+
+    The shipped default is the opposite (see TestRunningOver) — a meeting that
+    overruns waits for a person. Rooms that would rather have the TV back on
+    time switch this off, and that is what these tests cover.
+    """
+    room["config"].update({"STAY_UNTIL_HANGUP": False})
 
 
 def teams_meeting(uid, start, minutes=30, link=True):
@@ -212,6 +230,7 @@ class TestAutoOpen:
 
 class TestNeverStuck:
     def test_the_room_leaves_a_finished_meeting(self, room):
+        leaves_on_the_clock(room)
         now = datetime.now(timezone.utc)
         meeting = teams_meeting("done", now - timedelta(minutes=1), minutes=30)
         set_meetings(room["calendar"], [meeting])
@@ -241,6 +260,7 @@ class TestNeverStuck:
         assert room["room"].tick() == MODE_MEETING
 
     def test_a_meeting_removed_from_the_calendar_is_left(self, room):
+        leaves_on_the_clock(room)
         now = datetime.now(timezone.utc)
         meeting = teams_meeting("vanishes", now - timedelta(minutes=20), minutes=10)
         set_meetings(room["calendar"], [meeting])
@@ -263,6 +283,7 @@ class TestNeverStuck:
 
     def test_the_hard_limit_always_wins(self, room):
         """Even a calendar claiming an endless meeting cannot pin the screen."""
+        leaves_on_the_clock(room)
         now = datetime.now(timezone.utc)
         room["config"].update({"MAX_MEETING_MINUTES": 10})
         forever = teams_meeting("forever", now - timedelta(hours=6), minutes=60 * 24)
@@ -276,12 +297,143 @@ class TestNeverStuck:
         assert room["room"].tick() == MODE_HOME
 
     def test_a_cancelled_meeting_is_left(self, room):
+        leaves_on_the_clock(room)
         now = datetime.now(timezone.utc)
         meeting = teams_meeting("cancelled", now - timedelta(minutes=1), minutes=60)
         set_meetings(room["calendar"], [meeting])
         room["room"].open_meeting(meeting, manual=True)
         meeting.cancelled = True
         assert room["room"].tick() == MODE_HOME
+
+
+class TestRunningOver:
+    """Meetings overrun. The room waits for a person, not for the clock.
+
+    These describe the appliance as it ships (``STAY_UNTIL_HANGUP`` on): the
+    booking's end time never hangs up on a call that is still going, and what
+    does end it is somebody pressing Leave — or the meeting page itself no
+    longer being in a call, which hangs up on nobody.
+    """
+
+    def running_over(self, room, *, booked_minutes=30, opened_minutes_ago=45):
+        """A meeting booked for 30 minutes that has been on the TV for 45."""
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting(
+            "over", now - timedelta(minutes=opened_minutes_ago), minutes=booked_minutes
+        )
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+        room["room"].state().active.opened_at = now - timedelta(minutes=opened_minutes_ago)
+        return meeting
+
+    def test_a_meeting_that_runs_over_stays_on_the_tv(self, room):
+        self.running_over(room)
+        for _ in range(5):
+            assert room["room"].tick() == MODE_MEETING
+        assert room["browser"].home_count == 0, "nobody asked the room to leave"
+
+    def test_the_overrun_is_reported_to_the_room(self, room):
+        """Whoever is in here should see why the TV has not gone back."""
+        self.running_over(room)
+        room["room"].tick()
+        assert room["room"].state().active.running_over is True
+        assert room["room"].dashboard_payload()["active_meeting"]["running_over"] is True
+
+    def test_leaving_by_hand_ends_it(self, room):
+        self.running_over(room)
+        room["room"].tick()
+        assert room["room"].leave_meeting(reason="tapped Leave") is True
+        assert room["room"].tick() == MODE_HOME
+        assert room["browser"].left == 1
+
+    def test_the_remote_hang_up_ends_it(self, room):
+        self.running_over(room)
+        room["room"].tick()
+        assert room["room"].dispatch_action("hangup")["ok"] is True
+        assert room["room"].tick() == MODE_HOME
+
+    def test_it_ends_when_the_call_itself_does(self, room):
+        """Not a hang-up: there is nothing left on the page to hang up on."""
+        self.running_over(room)
+        room["browser"].call_up = False
+        for _ in range(CALL_GONE_CHECKS - 1):
+            assert room["room"].tick() == MODE_MEETING, "one reading is not enough"
+        assert room["room"].tick() == MODE_HOME
+
+    def test_one_stray_reading_does_not_end_it(self, room):
+        """A page mid-redraw says "no call" for a moment. That is not an answer."""
+        self.running_over(room)
+        room["browser"].call_up = False
+        assert room["room"].tick() == MODE_MEETING
+        room["browser"].call_up = True
+        assert room["room"].tick() == MODE_MEETING
+
+        room["browser"].call_up = False
+        for _ in range(CALL_GONE_CHECKS - 1):
+            assert room["room"].tick() == MODE_MEETING, "the count starts again"
+        assert room["room"].tick() == MODE_HOME
+
+    def test_a_page_that_cannot_be_read_keeps_the_meeting(self, room):
+        """"Cannot see the call" must never be read as "the call is over"."""
+        self.running_over(room)
+        room["browser"].call_up = None
+        for _ in range(CALL_GONE_CHECKS + 2):
+            assert room["room"].tick() == MODE_MEETING
+
+    def test_a_join_still_in_progress_is_not_cut_off(self, room):
+        """Joining a booking late: the pre-join screen is not an ended call."""
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("late", now - timedelta(minutes=40), minutes=30)
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+        room["browser"].call_up = False
+        for _ in range(CALL_GONE_CHECKS + 2):
+            assert room["room"].tick() == MODE_MEETING
+        assert room["browser"].call_probes == 0, "the page is not asked mid-join"
+
+    def test_a_cancelled_meeting_is_not_hung_up_on_mid_call(self, room):
+        """The organiser tidying up their calendar is not a reason to cut in."""
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("cancelled", now - timedelta(minutes=20), minutes=60)
+        set_meetings(room["calendar"], [meeting])
+        room["room"].open_meeting(meeting, manual=True)
+        room["room"].state().active.opened_at = now - timedelta(minutes=20)
+        meeting.cancelled = True
+        assert room["room"].tick() == MODE_MEETING
+
+    def test_a_live_call_outlasts_the_safety_limit(self, room):
+        """A workshop that runs all day is still a call somebody is in."""
+        room["config"].update({"MAX_MEETING_MINUTES": 10})
+        self.running_over(room)
+        assert room["room"].tick() == MODE_MEETING
+
+    def test_the_safety_limit_clears_an_abandoned_meeting_page(self, room):
+        room["config"].update({"MAX_MEETING_MINUTES": 10})
+        self.running_over(room)
+        room["browser"].call_up = False
+        assert room["room"].tick() == MODE_HOME
+
+    def test_the_safety_limit_survives_a_probe_that_cannot_answer(self, room):
+        """A backstop a broken probe can silence is not a backstop."""
+        room["config"].update({"MAX_MEETING_MINUTES": 10})
+        self.running_over(room)
+        room["browser"].call_up = None
+        assert room["room"].tick() == MODE_HOME
+
+    def test_the_next_meeting_opens_once_the_overrun_ends(self, room):
+        """The room heals itself: no one has to press anything the next hour."""
+        now = datetime.now(timezone.utc)
+        earlier = teams_meeting("earlier", now - timedelta(minutes=45), minutes=30)
+        nowish = teams_meeting("nowish", now - timedelta(seconds=30), minutes=30)
+        set_meetings(room["calendar"], [earlier, nowish])
+        room["room"].open_meeting(earlier, manual=True)
+        room["room"].state().active.opened_at = now - timedelta(minutes=45)
+
+        assert room["room"].tick() == MODE_MEETING
+        room["browser"].call_up = False
+        for _ in range(CALL_GONE_CHECKS):
+            room["room"].tick()
+        assert room["browser"].opened == ["earlier", "nowish"]
 
 
 class TestManualJoin:

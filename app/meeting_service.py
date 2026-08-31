@@ -13,9 +13,14 @@ Precedence, highest first:
 
 Two safety rules matter more than anything clever here:
 
-* The appliance **always** leaves a meeting screen eventually. A meeting ends at
-  its scheduled end plus a grace period; failing that, at a hard maximum;
-  failing that, if the meeting vanishes from the calendar entirely.
+* The appliance **never** hangs up on a call that is still going, and **never**
+  gets stuck on a meeting screen that is finished. A meeting that runs past its
+  booked end stays on the TV until somebody presses Leave (``STAY_UNTIL_HANGUP``,
+  the default) — a calendar entry saying the half-hour is up is not a reason to
+  cut a room off mid-sentence. What ends it is a person, or the meeting page
+  itself no longer being in a call. The hard maximum remains as a backstop for a
+  page nobody is in. With ``STAY_UNTIL_HANGUP`` off, the older behaviour returns:
+  the clock alone ends the meeting, at its scheduled end plus a grace period.
 * A failure in this loop is caught and logged, and the loop keeps running.
 
 Joining is deliberately idempotent. Every JOIN button in the building ends up in
@@ -57,6 +62,12 @@ log = get_logger("room")
 #: How often the state machine re-evaluates.
 TICK_SECONDS = 5.0
 
+#: How many checks in a row must agree that the meeting page is no longer in a
+#: call before the room tidies up a meeting that has run past its booked end.
+#: One "no" can be a page mid-redraw or a control that has auto-hidden; three of
+#: them, a tick apart, is a call that has really finished.
+CALL_GONE_CHECKS = 3
+
 #: How long the last room-button press is worth showing. The TV and the phone
 #: controller render it as a brief confirmation ("Microphone muted"), so an old
 #: entry is not history, it is a lie about what just happened.
@@ -73,6 +84,10 @@ class ActiveMeeting:
     scheduled_end: datetime
     opened_at: datetime
     opened_manually: bool = False
+    #: True once the meeting is past its booked end and the room has decided to
+    #: stay anyway. The phone controller says so, so nobody wonders why the TV
+    #: has not gone back to the dashboard.
+    running_over: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -82,6 +97,7 @@ class ActiveMeeting:
             "scheduled_end": self.scheduled_end.isoformat(),
             "opened_at": self.opened_at.isoformat(),
             "opened_manually": self.opened_manually,
+            "running_over": self.running_over,
         }
 
 
@@ -149,6 +165,10 @@ class MeetingService:
         self._thread: threading.Thread | None = None
         self._network_ok = True
         self._opened_meeting_ids: set[str] = set()
+        #: Consecutive checks that found no call on the meeting page. Reset by
+        #: anything that looks like a call, so only a settled "nobody is in
+        #: this" ever ends an over-running meeting.
+        self._call_gone_checks = 0
         self._last_daily_restart: date | None = None
         self._starting_up = True
 
@@ -272,10 +292,57 @@ class MeetingService:
         return mode
 
     def _should_return_home(self, active: ActiveMeeting, now: datetime) -> str:
-        """Why the TV should leave this meeting, or an empty string to stay."""
-        grace = timedelta(minutes=self.config.float_("RETURN_HOME_MINUTES"))
-        hard_limit = timedelta(minutes=self.config.int_("MAX_MEETING_MINUTES"))
+        """Why the TV should leave this meeting, or an empty string to stay.
 
+        The clock alone never ends a meeting while ``STAY_UNTIL_HANGUP`` is on.
+        A booking that says 30 minutes and a conversation that takes 50 are both
+        perfectly normal, and a room that hangs up on the second one is worse
+        than a room that stays on a finished meeting page for a while. So an
+        over-running meeting is ended by a person pressing Leave — or by the
+        meeting page itself no longer being in a call, which is not a hang-up
+        because there is nothing left to hang up on.
+        """
+        hard_limit = timedelta(minutes=self.config.int_("MAX_MEETING_MINUTES"))
+        limit_reached = now >= active.opened_at + hard_limit
+        overdue = self._calendar_verdict(active, now)
+
+        if not self.config.bool_("STAY_UNTIL_HANGUP"):
+            if overdue:
+                return overdue
+            if limit_reached:
+                return self._limit_reason()
+            return ""
+
+        self._note_overrun(active, bool(overdue))
+        if not overdue and not limit_reached:
+            self._call_gone_checks = 0
+            return ""
+
+        # A page still working through the pre-join screens is not "out of the
+        # call": it has not got in yet. Asking before the join has had its time
+        # would end the meeting of anyone who joined a booking late by hand.
+        in_call: bool | None = True
+        if now >= active.opened_at + self._reopen_window():
+            in_call = self._call_is_up()
+        self._call_gone_checks = self._call_gone_checks + 1 if in_call is False else 0
+
+        # Before the safety limit an unreadable page counts *for* staying — the
+        # room never hangs up on a call it merely cannot see. At the limit it
+        # counts against, because a backstop that can be silenced by a broken
+        # probe is not a backstop.
+        if limit_reached and in_call is not True:
+            return self._limit_reason()
+        if self._call_gone_checks >= CALL_GONE_CHECKS:
+            return overdue or "the meeting page is no longer in a call"
+        return ""
+
+    def _calendar_verdict(self, active: ActiveMeeting, now: datetime) -> str:
+        """What the calendar says about this meeting being over, or "".
+
+        This is the schedule's opinion, not a decision: what the room does with
+        it depends on ``STAY_UNTIL_HANGUP``.
+        """
+        grace = timedelta(minutes=self.config.float_("RETURN_HOME_MINUTES"))
         meeting = self.calendar.find(active.meeting_id)
         if meeting is not None:
             # Trust the live calendar: the meeting may have been extended.
@@ -283,18 +350,40 @@ class MeetingService:
                 return "meeting ended"
             if meeting.cancelled:
                 return "meeting cancelled"
-        else:
-            if now >= active.scheduled_end + grace:
-                return "meeting ended"
-            # The calendar may simply be unreachable; only treat a *successful*
-            # refresh that no longer lists the meeting as it having gone away.
-            snapshot = self.calendar.snapshot
-            if snapshot.ok and not snapshot.stale and now >= active.scheduled_end:
-                return "meeting no longer on the calendar"
+            return ""
 
-        if now >= active.opened_at + hard_limit:
-            return f"safety limit of {self.config.int_('MAX_MEETING_MINUTES')} minutes reached"
+        if now >= active.scheduled_end + grace:
+            return "meeting ended"
+        # The calendar may simply be unreachable; only treat a *successful*
+        # refresh that no longer lists the meeting as it having gone away.
+        snapshot = self.calendar.snapshot
+        if snapshot.ok and not snapshot.stale and now >= active.scheduled_end:
+            return "meeting no longer on the calendar"
         return ""
+
+    def _limit_reason(self) -> str:
+        return f"safety limit of {self.config.int_('MAX_MEETING_MINUTES')} minutes reached"
+
+    def _call_is_up(self) -> bool | None:
+        """Is there still a call on the meeting page? None when unknowable."""
+        try:
+            return self.browser.in_call()
+        except Exception:  # pragma: no cover - a probe must never end a call
+            log.debug("room.in_call_probe_failed", exc_info=True)
+            return None
+
+    def _note_overrun(self, active: ActiveMeeting, running_over: bool) -> None:
+        """Record — once — that a meeting is now past its booked end."""
+        with self._lock:
+            if active.running_over == running_over:
+                return
+            active.running_over = running_over
+        if running_over:
+            log_event(
+                log, logging.INFO, "meeting.running_over",
+                provider=active.provider_id or "unknown",
+                booked_until=active.scheduled_end.isoformat(timespec="minutes"),
+            )
 
     def _meeting_due(self, now: datetime) -> Meeting | None:
         """The meeting that should be opened now, if any."""
@@ -407,6 +496,11 @@ class MeetingService:
                 retried = False
                 if manual and self.config.bool_("AUTO_CLICK_JOIN"):
                     retried = self.browser.retry_join()
+                # Someone asking to be back in the call is the opposite of a
+                # meeting to tidy up: start counting "no call on this page"
+                # again rather than going home a tick after they pressed JOIN.
+                if manual:
+                    self._call_gone_checks = 0
                 log_event(
                     log, logging.DEBUG, "meeting.join_already_open",
                     provider=meeting.provider_id or "unknown", manual=manual,
@@ -433,6 +527,7 @@ class MeetingService:
                 self._state.active = active
                 self._state.mode = MODE_MEETING
             self._camera_on = True
+            self._call_gone_checks = 0
             self._opened_meeting_ids.add(meeting.uid)
             # Keep the "already opened" set from growing without bound.
             if len(self._opened_meeting_ids) > 200:
@@ -492,6 +587,7 @@ class MeetingService:
         self._clear_active(reason)
 
     def _clear_active(self, reason: str) -> None:
+        self._call_gone_checks = 0
         with self._lock:
             self._state.active = None
             if self._state.mode == MODE_MEETING:

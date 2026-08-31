@@ -99,11 +99,21 @@ AUTO_JOIN_TIMEOUT_SECONDS: 90
 JOIN_REPEAT_GUARD_SECONDS: 25.0
 
 # Grace period after a meeting's scheduled end before the TV goes back to
-# the room screen.
+# the room screen. While “Stay in a meeting that runs over” is on, a
+# meeting still in a call waits for the call to end as well.
 RETURN_HOME_MINUTES: 2.0
 
+# A meeting that runs past its scheduled end stays on the TV until someone
+# presses Leave — on the TV, on a phone, or the red button on the remote.
+# The room still tidies itself up once the meeting page is no longer in a
+# call. Switch this off to return to the dashboard on the clock, the
+# moment the grace period above is up.
+STAY_UNTIL_HANGUP: true
+
 # Safety net: the appliance never stays on a meeting page longer than
-# this, even if the calendar goes strange.
+# this, even if the calendar goes strange. With “Stay in a meeting that
+# runs over” on, a call that is demonstrably still up outlasts the limit;
+# a meeting page nobody is in does not.
 MAX_MEETING_MINUTES: 240
 
 # One per line, matched case-insensitively against on-screen button text.

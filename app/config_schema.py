@@ -356,7 +356,20 @@ FIELDS: tuple[Field, ...] = (
         group="meetings",
         label="Return to dashboard after (minutes)",
         help="Grace period after a meeting's scheduled end before the TV goes "
-        "back to the room screen.",
+        "back to the room screen. While “Stay in a meeting that runs over” is on, "
+        "a meeting still in a call waits for the call to end as well.",
+    ),
+    Field(
+        key="STAY_UNTIL_HANGUP",
+        type="bool",
+        default=True,
+        group="meetings",
+        label="Stay in a meeting that runs over",
+        help="A meeting that runs past its scheduled end stays on the TV until "
+        "someone presses Leave — on the TV, on a phone, or the red button on "
+        "the remote. The room still tidies itself up once the meeting page is no "
+        "longer in a call. Switch this off to return to the dashboard on the "
+        "clock, the moment the grace period above is up.",
     ),
     Field(
         key="MAX_MEETING_MINUTES",
@@ -367,7 +380,9 @@ FIELDS: tuple[Field, ...] = (
         group="meetings",
         label="Hard limit on a meeting screen (minutes)",
         help="Safety net: the appliance never stays on a meeting page longer "
-        "than this, even if the calendar goes strange.",
+        "than this, even if the calendar goes strange. With “Stay in a meeting "
+        "that runs over” on, a call that is demonstrably still up outlasts the "
+        "limit; a meeting page nobody is in does not.",
         advanced=True,
     ),
     Field(

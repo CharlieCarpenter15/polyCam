@@ -48,6 +48,9 @@ class FakeBrowser:
     def open_meeting(self, meeting, *, reason=""):
         return True
 
+    def in_call(self):
+        return True
+
     def retry_join(self):
         return True
 

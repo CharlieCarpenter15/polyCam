@@ -612,6 +612,35 @@ class BrowserService:
             time.sleep(0.6)
         return self.go_home(reason=reason)
 
+    def in_call(self) -> bool | None:
+        """Is the meeting page still in a call? ``None`` when it cannot be told.
+
+        The room asks this before tidying up a meeting that has run past its
+        scheduled end. A page still carrying a leave/hang-up control has people
+        in it, whatever the calendar believes — the same signal the join
+        automation stops on.
+
+        An unreachable or unreadable page answers ``None``, never ``False``:
+        "cannot see" must never be read as "the call is over", or a room would
+        be hung up on because Chromium was busy for a moment.
+        """
+        if not self.enabled:
+            return None
+        with self._lock:
+            if self._target != TARGET_MEETING:
+                return None
+        try:
+            probe = self._cdp.evaluate(build_in_call_script(), timeout=6.0)
+        except CDPError as exc:
+            log_event(log, logging.DEBUG, "meeting.in_call_probe_failed", error=str(exc))
+            return None
+        answer = str(probe).strip().lower()
+        if answer == "true":
+            return True
+        if answer == "false":
+            return False
+        return None
+
     def bring_to_front(self) -> bool:
         """Raise the kiosk window (after a mirroring session ends)."""
         return self._cdp.bring_to_front()
