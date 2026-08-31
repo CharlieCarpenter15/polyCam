@@ -17,6 +17,59 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib-room.sh
 . "$HERE/lib-room.sh"
 
+# ------------------------------------------------------------ event matching
+
+# Translate one line of UxPlay output into an event, or into nothing.
+#
+# The distinction that matters is between *sockets* and *sessions*. UxPlay
+# prints "Accepted IPv4 client on socket 7" and "Connection closed on socket 7"
+# for every TCP connection it handles — including the ones an iPhone opens just
+# to ask what this receiver is when somebody opens the Screen Mirroring menu,
+# and the several a real client opens and closes around one screen share.
+# Matching those meant the dashboard stepped aside for a phone that was only
+# looking, and stepped back over a screen that was still being shared.
+#
+# These are the lines that describe the session itself. All three are logged at
+# UxPlay's default level; the connection counters next to them are not, so
+# there is nothing more specific to wait for:
+#
+#   connection request from NAME (MODEL) with deviceID = ID   who is asking
+#   raop_rtp_mirror starting mirroring                        mirroring is live
+#   raop_rtp_mirror->running is no longer true                mirroring ended
+#
+# Prints "client NAME", "connected" or "disconnected"; empty means "not an
+# event". Kept free of side effects so the test suite can check it against
+# recorded UxPlay output.
+airplay_event_for_line() {
+  local line="$1"
+  local lowered
+  lowered="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+  case "$lowered" in
+    # -nohold announces the takeover by IP address, and the mirroring line that
+    # follows reports the session anyway. Matched first: it also says "from".
+    *'"nohold" feature'*)
+      : ;;
+    *"connection request from"*)
+      printf 'client %s\n' "$(printf '%s' "$line" |
+        sed -n 's/^.*connection request from \(.*\) ([^()]*) with deviceID.*$/\1/p')"
+      ;;
+    *"starting mirroring"*)
+      printf 'connected\n'
+      ;;
+    *"is no longer true"* | *"lost connection with client"*)
+      printf 'disconnected\n'
+      ;;
+  esac
+}
+
+# Sourcing this script with ROOM_AIRPLAY_MATCH_ONLY set defines the matcher and
+# stops there, which is how the tests exercise it without starting a receiver.
+if [ -n "${ROOM_AIRPLAY_MATCH_ONLY:-}" ]; then
+  # Sourced (the tests) returns; run directly by mistake, exit instead.
+  [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
+  exit 0
+fi
+
 room_load_config
 
 ENABLED="$(room_config AIRPLAY_ENABLED true)"
@@ -126,26 +179,25 @@ trap cleanup EXIT INT TERM
 
 RESTARTS=0
 
-# Translate one line of UxPlay output into an event.
-#
-# The strings below are what UxPlay prints when a device connects or leaves.
-# They are matched as case-insensitive substrings rather than exactly, so a
-# reworded message in a future release does not silently stop the dashboard
-# from stepping aside for a shared screen.
+# The device name arrives one line before mirroring starts, so it is held here
+# until there is a session to attach it to.
+PENDING_CLIENT=""
+
+# Act on one line of UxPlay output.
 handle_line() {
-  local line="$1"
-  local lowered client
-  lowered="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
-  case "$lowered" in
-    *"accepted ip"* | *"accepted client"* | *"connection request from"*)
-      client="$(printf '%s' "$line" | sed -n 's/.*from[: ]*\([^ ,]*\).*/\1/p')"
-      report connected "$client"
-      ;;
-    *"begin streaming"* | *"start mirroring"* | *"video stream"*)
-      report connected ""
-      ;;
-    *"connection closed"* | *"client disconnected"* | *"teardown"* | \
-    *"stopping"* | *"reset by client"*)
+  local verdict event name
+  verdict="$(airplay_event_for_line "$1")"
+  [ -n "$verdict" ] || return 0
+
+  event="${verdict%% *}"
+  name="${verdict#"$event"}"
+  name="${name# }"
+
+  case "$event" in
+    client) PENDING_CLIENT="$name" ;;
+    connected) report connected "$PENDING_CLIENT" ;;
+    disconnected)
+      PENDING_CLIENT=""
       report disconnected
       ;;
   esac
