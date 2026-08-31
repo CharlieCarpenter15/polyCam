@@ -208,6 +208,25 @@ class TestRemote:
         service._handle_key("KEY_ENTER", {"KEY_ENTER": "join"})
         assert service.status()["last_action"] == "join"
 
+    def test_a_watcher_with_no_dispatcher_reports_but_never_acts(self, config):
+        """The web backend's copy: two of them would act on every press twice.
+
+        Mute and camera both toggle, so a doubled press left them exactly where
+        they started — the remote looked dead.
+        """
+        service = RemoteService(config)
+        service._handle_key("KEY_MUTE", {"KEY_MUTE": "mute"})
+        status = service.status()
+        assert status["last_action"] == "mute", "still worth showing in Diagnostics"
+        assert status["presses"] == 1
+
+    def test_the_backend_does_not_act_on_buttons_itself(self, mock_config):
+        """room-remote.service forwards them to /api/internal/action instead."""
+        from app.main import RoomAppliance
+
+        appliance = RoomAppliance(mock_config)
+        assert appliance.remote.dispatch is None
+
 
 class TestSystemService:
     def test_only_our_own_units_can_be_restarted(self, config):

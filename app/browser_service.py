@@ -212,6 +212,28 @@ class BrowserService:
                 "last_join": self._last_attempt.to_dict(),
             }
 
+    def join_state(self) -> dict[str, object]:
+        """How the join automation is getting on, for the TV and the phones.
+
+        Lock-only on purpose: the dashboard asks every couple of seconds and
+        must never wait on a DevTools round trip for an answer. Everything is
+        reported against the meeting currently on screen, so a stale verdict
+        from the meeting before it cannot leak into the room's UI.
+        """
+        with self._lock:
+            attempt = self._last_attempt
+            thread = self._join_thread
+            current = attempt.meeting_id == self._meeting_id and bool(self._meeting_id)
+            running = bool(thread and thread.is_alive())
+            return {
+                "running": running,
+                "in_call": current and attempt.in_call,
+                # Sitting in the provider's lobby is success in progress, not
+                # a failure: there is nothing left to press.
+                "waiting": current and running and attempt.waiting,
+                "gave_up": current and attempt.gave_up,
+            }
+
     def _looks_like_dashboard(self, url: str) -> bool:
         if not url:
             return False

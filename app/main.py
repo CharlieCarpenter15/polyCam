@@ -96,12 +96,13 @@ class RoomAppliance:
             self.room,
             self.system,
         )
-        self.remote = RemoteService(config, self._on_remote_action)
+        # No dispatcher: room-remote.service is the one process that acts on a
+        # button, and it posts to /api/internal/action. This copy only watches,
+        # so Settings → Diagnostics can show which devices are being read and
+        # what the last button was.
+        self.remote = RemoteService(config)
         self._started = False
         config.on_change(self._on_config_change)
-
-    def _on_remote_action(self, action: str) -> None:
-        self.room.dispatch_action(action)
 
     def _on_config_change(self, values: dict[str, Any], changed: set[str]) -> None:
         if "LOG_LEVEL" in changed or "LOG_FORMAT" in changed:
@@ -599,6 +600,7 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
                     "camera_ok": camera.get("status") == "ok",
                 },
                 "remote": payload.get("remote"),
+                "join": payload["join"],
                 "is_admin": is_admin(),
                 "version": __version__,
             }

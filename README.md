@@ -311,9 +311,16 @@ Then unplug the keyboard and mouse.
 the TV opens the meeting page and tries to press through the join buttons. If a
 person is in the room they see the meeting come up on its own.
 
+**Or not, if you would rather it waited.** Set **Settings → Meeting joining →
+Joining meetings** to *manual* and nothing reaches the TV until somebody asks
+for it. The dashboard shows what is next, and the room joins when JOIN is
+pressed. *automatic* is the default.
+
 **Joining by hand.** The big **JOIN** button on the dashboard always works —
-on a touch TV, on the phone control panel, or with the green button on a Poly
-remote. Use it whenever automatic joining did not get all the way in.
+on a touch TV, on the phone control panel, on the phone controller, or with the
+green button on a Poly remote. Use it whenever automatic joining did not get
+all the way in: pressing it while the meeting page is already up does not
+reload anything, it has another go at the buttons on the page in front of it.
 
 **A meeting ends.** Two minutes after the scheduled end time (configurable) the
 TV returns to the dashboard by itself. There is also a hard limit — by default
@@ -890,7 +897,10 @@ See [Which Pi, honestly](#which-pi-honestly).
 
 Expected some of the time — see
 [what is best-effort](#what-is-deliberately-best-effort). Press **JOIN** on the
-dashboard, the phone panel, or the remote's green button.
+dashboard, the phone panel, the phone controller, or the remote's green button:
+the page stays exactly where it is and the room works through its buttons
+again, so nothing that has already been typed or signed into is thrown away.
+Press it as many times as you like.
 
 If it fails every time, look at **Checks → Meeting join automation**. It lists
 the buttons the automation pressed and where it stopped. If a provider has
@@ -982,7 +992,7 @@ What this appliance does about that:
 | Button texts live in **configuration**, editable from Settings | A rename is fixed in the UI in seconds, with no update |
 | Per-provider quirks are in one small file (`app/join_flows.py`) | Adding or fixing a provider is a local, obvious edit |
 | Every automated step is **optional** | Failure leaves the room on the provider's own pre-join screen |
-| The manual **JOIN** button is always available | On the TV, the phone, and the remote |
+| The manual **JOIN** button is always available | On the TV, the phone, and the remote — and pressing it at a page that stopped short retries it in place |
 | Failures are logged with what was pressed and where it stopped | So the fix is a config change, not an investigation |
 
 **The safe fallback is the pre-join screen**, which is exactly where a person
@@ -1189,8 +1199,8 @@ The most useful ones:
 | `ROOM_NAME` | `Meeting Room` | Shown on the TV |
 | `CALENDAR_ICS_URL` | *(empty)* | The room calendar. The one thing you must set |
 | `CALENDAR_REFRESH_SECONDS` | `30` | How often meetings are re-fetched |
-| `AUTO_OPEN_MEETING` | `true` | Open meetings without being asked |
-| `AUTO_OPEN_MINUTES` | `1` | How early |
+| `MEETING_JOIN_MODE` | `automatic` | `automatic` opens meetings by itself; `manual` waits for JOIN |
+| `AUTO_OPEN_MINUTES` | `1` | How early, when automatic |
 | `AUTO_CLICK_JOIN` | `true` | Try to press Join too |
 | `RETURN_HOME_MINUTES` | `2` | Grace period after a meeting ends |
 | `AIRPLAY_NAME` | *(room name)* | What appears in Screen Mirroring |

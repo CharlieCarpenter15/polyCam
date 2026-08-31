@@ -191,6 +191,58 @@ class TestRecovery:
         assert config.str_("THEME") == "dark"
 
 
+class TestUpgrades:
+    """A room updated in place keeps behaving the way it was set up."""
+
+    def test_a_room_that_had_switched_auto_open_off_stays_manual(self, room_dirs):
+        room_dirs["file"].write_text(
+            yaml.safe_dump({"ROOM_NAME": "Old Room", "AUTO_OPEN_MEETING": False}),
+            encoding="utf-8",
+        )
+        manager = ConfigManager(room_dirs["file"])
+        assert manager.str_("MEETING_JOIN_MODE") == "manual"
+        assert manager.str_("ROOM_NAME") == "Old Room"
+
+    def test_a_room_that_left_auto_open_on_still_joins_by_itself(self, room_dirs):
+        room_dirs["file"].write_text(
+            yaml.safe_dump({"AUTO_OPEN_MEETING": True}), encoding="utf-8"
+        )
+        assert ConfigManager(room_dirs["file"]).str_("MEETING_JOIN_MODE") == "automatic"
+
+    def test_the_current_setting_wins_over_the_old_one(self, room_dirs):
+        room_dirs["file"].write_text(
+            yaml.safe_dump(
+                {"AUTO_OPEN_MEETING": True, "MEETING_JOIN_MODE": "manual"}
+            ),
+            encoding="utf-8",
+        )
+        assert ConfigManager(room_dirs["file"]).str_("MEETING_JOIN_MODE") == "manual"
+
+    def test_the_old_name_still_works_as_an_environment_variable(
+        self, room_dirs, monkeypatch
+    ):
+        monkeypatch.setenv("AUTO_OPEN_MEETING", "no")
+        assert ConfigManager(room_dirs["file"]).str_("MEETING_JOIN_MODE") == "manual"
+
+    def test_a_renamed_setting_is_not_reported_as_an_unknown_key(self, room_dirs):
+        room_dirs["file"].write_text(
+            yaml.safe_dump({"AUTO_OPEN_MEETING": False}), encoding="utf-8"
+        )
+        manager = ConfigManager(room_dirs["file"])
+        assert manager.warnings == []
+        assert "AUTO_OPEN_MEETING" not in manager.as_dict()
+
+    def test_the_old_name_is_not_written_back(self, room_dirs):
+        room_dirs["file"].write_text(
+            yaml.safe_dump({"AUTO_OPEN_MEETING": False}), encoding="utf-8"
+        )
+        manager = ConfigManager(room_dirs["file"])
+        manager.update({"ROOM_NAME": "Saved"})
+        written = yaml.safe_load(room_dirs["file"].read_text(encoding="utf-8"))
+        assert "AUTO_OPEN_MEETING" not in written
+        assert written["MEETING_JOIN_MODE"] == "manual"
+
+
 class TestSecrets:
     def test_secrets_are_redacted_in_api_output(self, config):
         config.update({"CALENDAR_ICS_URL": "https://example.com/x.ics", "ADMIN_PIN": "1234"})

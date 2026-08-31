@@ -49,6 +49,14 @@ class FakeBrowser:
         self.retried += 1
         return True
 
+    def join_state(self):
+        return {
+            "running": False,
+            "in_call": False,
+            "waiting": False,
+            "gave_up": False,
+        }
+
     def toggle_meeting_mute(self):
         return True
 
@@ -150,11 +158,28 @@ class TestAutoOpen:
         assert room["room"].tick() == MODE_HOME
         assert room["browser"].opened == []
 
-    def test_auto_open_can_be_switched_off(self, room):
-        room["config"].update({"AUTO_OPEN_MEETING": False})
+    def test_a_manual_room_waits_to_be_asked(self, room):
+        room["config"].update({"MEETING_JOIN_MODE": "manual"})
         now = datetime.now(timezone.utc)
         set_meetings(room["calendar"], [teams_meeting("soon", now + timedelta(seconds=10))])
         assert room["room"].tick() == MODE_HOME
+        assert room["browser"].opened == []
+
+    def test_a_manual_room_still_joins_when_somebody_presses_join(self, room):
+        """Manual means "not by itself" — never "not at all"."""
+        room["config"].update({"MEETING_JOIN_MODE": "manual"})
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("soon", now + timedelta(seconds=10))])
+        room["room"].tick()
+
+        ok, _ = room["room"].join_next()
+        assert ok and room["browser"].opened == ["soon"]
+        assert room["room"].mode == MODE_MEETING
+
+    def test_the_mode_is_reported_to_the_screens(self, room):
+        assert room["room"].dashboard_payload()["join"]["mode"] == "automatic"
+        room["config"].update({"MEETING_JOIN_MODE": "manual"})
+        assert room["room"].dashboard_payload()["join"]["mode"] == "manual"
 
     def test_a_meeting_already_running_is_joined_after_a_restart(self, room):
         """Rebooting mid-meeting should put the room back into the call."""
@@ -438,6 +463,55 @@ class TestJoiningIsIdempotent:
         assert room["room"].retry_join_automation() is True
         assert room["browser"].retried == 1
         assert room["browser"].opened == ["retry"]
+
+
+class TestPressingJoinAtAPageThatStoppedShort:
+    """The room is on the meeting page but not in the call, and JOIN is pressed.
+
+    This is what "the join button does nothing" was: the page was already open,
+    so every JOIN button in the room — the Poly remote, a phone, the TV —
+    answered "joining…" and then sat there. Re-navigating is still wrong, but
+    doing nothing at all is worse.
+    """
+
+    def test_the_remote_has_another_go_at_the_join_buttons(self, room):
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("stuck", now - timedelta(minutes=1))])
+        assert room["room"].tick() == MODE_MEETING          # opened by itself
+
+        result = room["room"].dispatch_action("join")
+        assert result["ok"] is True
+        assert room["browser"].retried == 1, "the remote must retry the join"
+        assert room["browser"].opened == ["stuck"], "and never reload the page"
+
+    def test_a_phone_pressing_join_on_the_open_meeting_retries_too(self, room):
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("stuck", now - timedelta(minutes=1))])
+        room["room"].tick()
+
+        ok, _ = room["room"].join_meeting_id("stuck")
+        assert ok and room["browser"].retried == 1
+        assert room["browser"].opened == ["stuck"]
+
+    def test_the_scheduled_open_does_not_click_at_a_page_nobody_asked_about(self, room):
+        """Only a person pressing JOIN means "try again"; a tick does not."""
+        now = datetime.now(timezone.utc)
+        meeting = teams_meeting("quiet", now - timedelta(minutes=1))
+        set_meetings(room["calendar"], [meeting])
+        room["room"].tick()
+        room["room"].open_meeting(meeting, manual=False)
+        assert room["browser"].retried == 0
+
+    def test_a_room_that_joins_by_hand_is_left_alone(self, room):
+        """With the automation off, somebody is working that page themselves."""
+        room["config"].update({"AUTO_CLICK_JOIN": False})
+        now = datetime.now(timezone.utc)
+        set_meetings(room["calendar"], [teams_meeting("byhand", now - timedelta(minutes=1))])
+        room["room"].tick()
+
+        assert room["room"].dispatch_action("join")["ok"] is True
+        assert room["browser"].retried == 0
+        assert room["browser"].fronted > 0, "but the page still comes forward"
 
 
 class TestLastRemoteAction:

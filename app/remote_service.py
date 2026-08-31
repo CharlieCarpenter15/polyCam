@@ -11,6 +11,12 @@ the real codes with:
 or from Settings → Diagnostics → Discover remote buttons, which uses
 :meth:`RemoteService.capture_keys` to do the same thing without a terminal.
 
+Exactly one process may act on the buttons: ``room-remote.service``, which runs
+:mod:`app.remote_runner` and forwards each press to the backend. The web backend
+keeps a service of its own with no dispatcher, purely so the diagnostics page
+can say which devices are being watched and what the last button was — two
+dispatchers would act on every press twice.
+
 The whole service is optional. Without ``python3-evdev``, without a remote, or
 with ``POLY_REMOTE_ENABLED`` off, it logs once and does nothing.
 """
@@ -101,10 +107,17 @@ class RemoteService:
     def __init__(
         self,
         config: ConfigManager,
-        dispatch: Callable[[str], None],
+        dispatch: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         #: Called with an action name from :data:`ACTIONS`.
+        #:
+        #: Without one the service watches and reports but never acts. That is
+        #: what the web backend wants: ``room-remote.service`` is the single
+        #: process that turns a button into an action, and a second one acting
+        #: on the same ``/dev/input`` devices fires every press twice — which
+        #: is invisible for volume but leaves mute and camera exactly where
+        #: they started, because both toggle.
         self.dispatch = dispatch
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -302,7 +315,12 @@ class RemoteService:
             with self._lock:
                 self._status.last_action = action
                 self._status.last_at = now
-            log_event(log, logging.INFO, "remote.button_pressed", key=name, action=action)
+            log_event(
+                log, logging.INFO, "remote.button_pressed",
+                key=name, action=action, acted_on=self.dispatch is not None,
+            )
+            if self.dispatch is None:
+                return          # watching for the diagnostics page, nothing more
             try:
                 self.dispatch(action)
             except Exception:

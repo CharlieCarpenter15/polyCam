@@ -545,3 +545,34 @@ class TestJoinLoop:
         assert joining.retry_join() is True
         assert joining.join_generation > before
         assert joining._join_thread is not None
+
+
+class TestJoinStateForTheScreens:
+    """What the TV and the phone controller are told about the automation."""
+
+    def test_a_quiet_room_reports_nothing(self, joining):
+        assert joining.join_state() == {
+            "running": False, "in_call": False, "waiting": False, "gave_up": False,
+        }
+
+    def test_reaching_the_call_is_reported(self, joining):
+        run_join(joining, FakeCDP(in_call_after=0))
+        assert joining.join_state()["in_call"] is True
+        assert joining.join_state()["gave_up"] is False
+
+    def test_giving_up_is_reported(self, joining, monkeypatch):
+        real_int = joining.config.int_
+        monkeypatch.setattr(
+            joining.config,
+            "int_",
+            lambda key: 0 if key == "AUTO_JOIN_TIMEOUT_SECONDS" else real_int(key),
+        )
+        run_join(joining, FakeCDP())
+        assert joining.join_state()["gave_up"] is True
+
+    def test_a_verdict_from_the_meeting_before_is_not_reported(self, joining):
+        """Otherwise the next meeting inherits the last one's failure."""
+        run_join(joining, FakeCDP(in_call_after=0))
+        with joining._lock:
+            joining._meeting_id = "the-next-meeting"    # the room has moved on
+        assert joining.join_state()["in_call"] is False

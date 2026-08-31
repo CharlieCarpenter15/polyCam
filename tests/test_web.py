@@ -597,9 +597,12 @@ class TestRoomController:
         payload = phone.get("/api/controller/state", environ_overrides=self.PHONE).get_json()
         for key in (
             "mode", "room", "now", "current", "next", "upcoming", "active_meeting",
-            "join_available", "audio", "sharing", "network_ok", "calendar",
+            "join_available", "join", "audio", "sharing", "network_ok", "calendar",
         ):
             assert key in payload, f"the controller needs {key}"
+        # Whether the room joins by itself changes what the page tells people
+        # to do, so the phone is told which way this room is set up.
+        assert payload["join"]["mode"] in ("automatic", "manual")
         # The page uses this to decide whether to offer settings and repairs.
         assert payload["is_admin"] is True
 

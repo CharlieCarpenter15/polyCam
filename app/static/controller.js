@@ -147,6 +147,15 @@
     return mins !== null && mins <= SOON_MINUTES;
   }
 
+  /* "automatic" (the room opens meetings itself) or "manual". */
+  function joinMode(payload) {
+    return (payload.join && payload.join.mode) || "automatic";
+  }
+
+  function automation(payload) {
+    return (payload.join && payload.join.automation) || {};
+  }
+
   function calendarTrouble(payload) {
     var cal = payload.calendar || {};
     if (!cal.configured) return "";
@@ -227,10 +236,33 @@
     }
 
     if (active || payload.mode === "meeting") {
+      var join = automation(payload);
+
+      // On the meeting page but not in the call: from a chair in the room
+      // that looks like the room having joined, so the one button on this
+      // page has to be the one that finishes the job.
+      if (active && join.gave_up) {
+        result.headline = "The room has not joined yet";
+        result.hint = titleOf(active) + " is on the TV, but the room could not " +
+          "press Join on the meeting's own page. Tap below and it will have " +
+          "another go.";
+        result.kind = "join";
+        result.disabled = false;
+        result.meetingId = active.id || "";
+        result.label = "Try joining again";
+        result.note = active.scheduled_end
+          ? "Booked until " + clockTime(active.scheduled_end)
+          : "";
+        return result;
+      }
+
       result.headline = "In a meeting";
-      result.hint = (active ? titleOf(active) : "A meeting") +
-        " is on the TV. Tap Leave when you are done, so the room is free for " +
-        "whoever is in here next.";
+      result.hint = join.waiting
+        ? (active ? titleOf(active) : "The meeting") + " is on the TV and the " +
+          "room is waiting to be let in. It joins the moment the host admits it."
+        : (active ? titleOf(active) : "A meeting") +
+          " is on the TV. Tap Leave when you are done, so the room is free for " +
+          "whoever is in here next.";
       result.kind = "leave";
       result.label = "Leave the meeting";
       result.disabled = false;
@@ -265,7 +297,11 @@
         result.headline = mins !== null && mins <= 1
           ? titleOf(target) + " starts now"
           : titleOf(target) + " starts in " + Math.ceil(mins) + " minutes";
-        result.hint = "Tap the big button and the room joins it on the TV.";
+        result.hint = joinMode(payload) === "manual"
+          ? "This room does not join by itself. Tap the big button and it goes " +
+            "on the TV."
+          : "It goes on the TV by itself just before it starts. Tap the big " +
+            "button if you want it now.";
       }
       return result;
     }

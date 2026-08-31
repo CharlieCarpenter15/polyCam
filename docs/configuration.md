@@ -40,9 +40,9 @@ needs only a calendar link.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `AUTO_OPEN_MEETING` | `true` | Open meetings automatically. Navigate the TV to the meeting shortly before it starts. |
-| `AUTO_OPEN_MINUTES` | `1.0` | Open this many minutes early. 1 means the meeting page opens about one minute before the start time. (min 0, max 30) |
-| `AUTO_CLICK_JOIN` | `true` | Try to press Join automatically. Best effort. Teams, Meet and Zoom change their web pages without notice, so if this fails the big JOIN button on the dashboard always works. |
+| `MEETING_JOIN_MODE` | `automatic` | Joining meetings. “automatic”: the room puts the meeting on the TV by itself, just before it starts. “manual”: nothing goes on the TV until somebody presses JOIN — on the dashboard, on a phone, or on the room remote. Either way, pressing JOIN always works. One of: automatic, manual. |
+| `AUTO_OPEN_MINUTES` | `1.0` | Open this many minutes early. 1 means the meeting page opens about one minute before the start time. Only used when joining is set to “automatic”. (min 0, max 30) |
+| `AUTO_CLICK_JOIN` | `true` | Try to press Join automatically. Best effort, and used whichever way the meeting was opened: the room presses its way through the provider's own “Join now” screens. Teams, Meet and Zoom change those pages without notice, so if this fails, pressing JOIN again has another go. |
 | `JOIN_SETTLE_SECONDS` | `0.0` | Wait before pressing anything (seconds). 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower hardware: pressing buttons on a page that has not finished drawing wastes the whole join attempt. A Raspberry Pi 3 may need 25–40. (min 0, max 120) _Advanced._ |
 | `AUTO_JOIN_TIMEOUT_SECONDS` | `90` | Give up on auto-join after (seconds). (min 10, max 600) _Advanced._ |
 | `JOIN_REPEAT_GUARD_SECONDS` | `25.0` | Do not press the same button twice within (seconds). A slow meeting page can look unchanged for several seconds after Join is pressed. Without this guard the room presses it again, and again, which looks like the meeting being opened several times over. (min 0, max 300) _Advanced._ |

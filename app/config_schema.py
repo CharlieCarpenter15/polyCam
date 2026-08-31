@@ -278,12 +278,16 @@ FIELDS: tuple[Field, ...] = (
     ),
     # -- Meeting joining ----------------------------------------------------
     Field(
-        key="AUTO_OPEN_MEETING",
-        type="bool",
-        default=True,
+        key="MEETING_JOIN_MODE",
+        type="choice",
+        default="automatic",
+        choices=("automatic", "manual"),
         group="meetings",
-        label="Open meetings automatically",
-        help="Navigate the TV to the meeting shortly before it starts.",
+        label="Joining meetings",
+        help="“automatic”: the room puts the meeting on the TV by itself, just "
+        "before it starts. “manual”: nothing goes on the TV until somebody "
+        "presses JOIN — on the dashboard, on a phone, or on the room remote. "
+        "Either way, pressing JOIN always works.",
     ),
     Field(
         key="AUTO_OPEN_MINUTES",
@@ -293,7 +297,8 @@ FIELDS: tuple[Field, ...] = (
         maximum=30.0,
         group="meetings",
         label="Open this many minutes early",
-        help="1 means the meeting page opens about one minute before the start time.",
+        help="1 means the meeting page opens about one minute before the start "
+        "time. Only used when joining is set to “automatic”.",
     ),
     Field(
         key="AUTO_CLICK_JOIN",
@@ -301,8 +306,10 @@ FIELDS: tuple[Field, ...] = (
         default=True,
         group="meetings",
         label="Try to press Join automatically",
-        help="Best effort. Teams, Meet and Zoom change their web pages without "
-        "notice, so if this fails the big JOIN button on the dashboard always works.",
+        help="Best effort, and used whichever way the meeting was opened: the "
+        "room presses its way through the provider's own “Join now” screens. "
+        "Teams, Meet and Zoom change those pages without notice, so if this "
+        "fails, pressing JOIN again has another go.",
     ),
     Field(
         key="JOIN_SETTLE_SECONDS",
@@ -1061,6 +1068,17 @@ FIELDS_BY_KEY: dict[str, Field] = {f.key: f for f in FIELDS}
 
 #: Keys whose values must never be written to a log line or a JSON API response.
 SECRET_KEYS: frozenset[str] = frozenset(f.key for f in FIELDS if f.secret)
+
+#: Settings earlier versions had, and the key that replaced each of them.
+#:
+#: A room that is updated in place keeps the behaviour it was configured with:
+#: :func:`config.legacy_values` reads the old key once and translates it, so a
+#: room whose owner had switched automatic joining off does not quietly start
+#: joining meetings again. Nothing writes these keys back — the next save
+#: records the new one.
+RENAMED_KEYS: dict[str, str] = {
+    "AUTO_OPEN_MEETING": "MEETING_JOIN_MODE",
+}
 
 
 def defaults() -> dict[str, Any]:

@@ -36,6 +36,7 @@
     var sub = [];
     var room = payload.room || {};
     sub.push(room.available ? "Room available" : "Room in use");
+    if (payload.join && payload.join.mode === "manual") sub.push("joins when asked");
     if (payload.calendar && payload.calendar.stale) sub.push("calendar offline, showing saved meetings");
     else if (payload.calendar && !payload.calendar.ok && payload.calendar.error) sub.push(payload.calendar.error);
     if (!payload.network_ok) sub.push("no internet");

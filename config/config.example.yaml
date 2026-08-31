@@ -69,14 +69,21 @@ CALENDAR_IGNORE_DECLINED: true
 # Meeting joining
 #   How the appliance behaves around meeting start and end times.
 # ----------------------------------------------------------------------
-# Navigate the TV to the meeting shortly before it starts.
-AUTO_OPEN_MEETING: true
+# “automatic”: the room puts the meeting on the TV by itself, just before
+# it starts. “manual”: nothing goes on the TV until somebody presses JOIN
+# — on the dashboard, on a phone, or on the room remote. Either way,
+# pressing JOIN always works.
+# options: automatic, manual
+MEETING_JOIN_MODE: automatic
 
 # 1 means the meeting page opens about one minute before the start time.
+# Only used when joining is set to “automatic”.
 AUTO_OPEN_MINUTES: 1.0
 
-# Best effort. Teams, Meet and Zoom change their web pages without notice,
-# so if this fails the big JOIN button on the dashboard always works.
+# Best effort, and used whichever way the meeting was opened: the room
+# presses its way through the provider's own “Join now” screens. Teams,
+# Meet and Zoom change those pages without notice, so if this fails,
+# pressing JOIN again has another go.
 AUTO_CLICK_JOIN: true
 
 # 0 uses a sensible per-provider default (6–8 seconds). Raise it on slower

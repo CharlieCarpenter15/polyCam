@@ -22,7 +22,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 import yaml
 
@@ -30,6 +30,7 @@ from . import paths
 from .config_schema import (
     FIELDS,
     FIELDS_BY_KEY,
+    RENAMED_KEYS,
     SECRET_KEYS,
     Field,
     defaults,
@@ -138,6 +139,30 @@ def validate_pairs(pairs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str
     return clean, errors
 
 
+def legacy_values(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Current settings implied by keys an older version of the appliance had.
+
+    Upgrading must never change how a room behaves. ``AUTO_OPEN_MEETING: false``
+    was how an administrator said "do not put meetings on the TV by yourself",
+    so it is read back as ``MEETING_JOIN_MODE: manual`` rather than being
+    dropped as an unknown key — which would have handed the room back to
+    automatic joining the next time it restarted.
+
+    Both the bare name and the ``ROOM_APPLIANCE_`` prefixed form are accepted,
+    because the same names work as environment variables.
+    """
+    out: dict[str, Any] = {}
+
+    for name in ("AUTO_OPEN_MEETING", "ROOM_APPLIANCE_AUTO_OPEN_MEETING"):
+        if name not in source:
+            continue
+        text = str(source[name]).strip().lower()
+        out["MEETING_JOIN_MODE"] = "manual" if text in _FALSE else "automatic"
+        break
+
+    return out
+
+
 def cross_check(values: dict[str, Any]) -> dict[str, str]:
     """Rules that involve more than one setting and must *block* a save.
 
@@ -193,6 +218,16 @@ def advisories(values: dict[str, Any]) -> dict[str, str]:
         notes["BACKGROUND_MODE"] = (
             "Upload images on the control panel for the slideshow to have "
             "anything to show."
+        )
+
+    if values.get("MEETING_JOIN_MODE") == "manual" and not any(
+        values.get(key)
+        for key in ("CONTROLLER_ENABLED", "PANEL_ENABLED", "POLY_REMOTE_ENABLED")
+    ):
+        notes["MEETING_JOIN_MODE"] = (
+            "Nothing will reach the TV on its own, and there is nowhere left to "
+            "press JOIN: the phone controller, the control panel and the room "
+            "remote are all switched off."
         )
 
     if values.get("DEV_MODE"):
@@ -251,6 +286,11 @@ def env_overlay() -> dict[str, Any]:
                         extra={"fields": {"key": field.key, "error": str(exc)}},
                     )
                 break
+
+    # A room whose .env still names a setting from an older version keeps
+    # meaning what it said; the current key always wins if both are present.
+    for key, value in legacy_values(sources).items():
+        out.setdefault(key, value)
     return out
 
 
@@ -480,7 +520,9 @@ class ConfigManager:
                 self._quarantine(candidate)
                 continue
             known = {k: v for k, v in raw.items() if k in FIELDS_BY_KEY}
-            unknown = sorted(set(raw) - set(known))
+            for key, value in legacy_values(raw).items():
+                known.setdefault(key, value)
+            unknown = sorted(set(raw) - set(known) - set(RENAMED_KEYS))
             if unknown:
                 log.warning(
                     "config.unknown_keys_ignored",

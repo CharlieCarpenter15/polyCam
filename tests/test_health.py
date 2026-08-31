@@ -51,6 +51,14 @@ class FakeBrowser:
     def retry_join(self):
         return True
 
+    def join_state(self):
+        return {
+            "running": False,
+            "in_call": False,
+            "waiting": False,
+            "gave_up": False,
+        }
+
     def toggle_meeting_mute(self):
         return True
 

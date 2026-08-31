@@ -250,13 +250,17 @@
       button.querySelector(".join-label").textContent = "Return to room";
       button.disabled = false;
       button.dataset.action = "leave";
-      hint.textContent = "The meeting is on screen";
+      hint.textContent = joinProgressHint(payload);
     } else if (next.has_link) {
       button.querySelector(".join-label").textContent = "Join";
       button.disabled = false;
       button.dataset.action = "join";
       button.dataset.meetingId = next.id || "";
-      hint.textContent = "";
+      // A room that joins by itself needs no instructions; one that waits to
+      // be asked has to say so, or the screen looks like it has forgotten.
+      hint.textContent = joinMode(payload) === "manual"
+        ? "This room does not join by itself — press Join when you are ready"
+        : "";
     } else {
       button.querySelector(".join-label").textContent = "No meeting link";
       button.disabled = true;
@@ -264,6 +268,25 @@
       hint.textContent = next.location ? next.location : "This meeting has no online link";
     }
     if (joining) button.classList.add("busy"); else button.classList.remove("busy");
+  }
+
+  /* "automatic" (the room opens meetings itself) or "manual". */
+  function joinMode(payload) {
+    return (payload.join && payload.join.mode) || "automatic";
+  }
+
+  /* The line under the button while a meeting is on the TV. The interesting
+     case is the room sitting on a provider's "Join now" screen: from across
+     the room that looks exactly like being in the call, so say what happened
+     and where the button that fixes it is. */
+  function joinProgressHint(payload) {
+    var automation = (payload.join && payload.join.automation) || {};
+    if (automation.waiting) return "Waiting to be let into the meeting";
+    if (automation.gave_up) {
+      // Short on purpose: this sits under the button on a TV, not on a phone.
+      return "The room could not press Join — try again from the remote or a phone";
+    }
+    return "The meeting is on screen";
   }
 
   function renderUpcoming(payload) {

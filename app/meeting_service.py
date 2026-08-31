@@ -21,7 +21,12 @@ Two safety rules matter more than anything clever here:
 Joining is deliberately idempotent. Every JOIN button in the building ends up in
 :meth:`MeetingService.open_meeting` — the TV, a phone, the Poly remote, the
 scheduled auto-open — and asking for the meeting that is already on screen
-brings the page forward instead of reloading it mid-join.
+brings the page forward and has another go at its Join buttons, rather than
+reloading it mid-join.
+
+Whether the scheduled auto-open happens at all is ``MEETING_JOIN_MODE``: an
+"automatic" room puts the meeting on the TV by itself, a "manual" one waits for
+somebody to press JOIN. Every other way into a meeting works the same in both.
 """
 
 from __future__ import annotations
@@ -202,6 +207,15 @@ class MeetingService:
         with self._lock:
             return self._state
 
+    def join_mode(self) -> str:
+        """Either "automatic" — the room opens meetings itself — or "manual"."""
+        mode = self.config.str_("MEETING_JOIN_MODE").strip().lower()
+        return "manual" if mode == "manual" else "automatic"
+
+    def joins_automatically(self) -> bool:
+        """True when the room puts a meeting on the TV without being asked."""
+        return self.join_mode() == "automatic"
+
     def _record_action(self, action: str) -> None:
         with self._lock:
             self._state.last_action = action
@@ -224,8 +238,8 @@ class MeetingService:
                 self._return_home(reason)
                 active = None
 
-        # 2. Open an upcoming meeting.
-        if active is None and self.config.bool_("AUTO_OPEN_MEETING"):
+        # 2. Open an upcoming meeting, unless this room joins by hand.
+        if active is None and self.joins_automatically():
             candidate = self._meeting_due(now)
             if candidate is not None:
                 self.open_meeting(candidate, manual=False)
@@ -363,11 +377,12 @@ class MeetingService:
 
         Idempotent on purpose. JOIN on the TV, JOIN on a phone, the Poly remote
         and the scheduled auto-open all arrive here, often within seconds of one
-        another. Re-navigating would reload the meeting page mid-join, so a
-        request for the meeting already on screen just brings it to the front
-        and reports success. Someone who genuinely wants another go has
-        ``retry_join_automation()``, which re-runs the buttons without
-        reloading the page.
+        another, and re-navigating would reload the meeting page mid-join. So a
+        request for the meeting already on screen never navigates: it brings the
+        page to the front, and — when a person asked for it — runs the join
+        buttons over the page again, which is the only thing that can help
+        somebody standing in the room pressing JOIN at a page that has stopped
+        short of the call.
         """
         if not meeting.has_link:
             return False
@@ -382,9 +397,20 @@ class MeetingService:
         with self._open_lock:
             if self._already_open(meeting):
                 self.browser.bring_to_front()
+                # A person pressing JOIN for the meeting already on screen is
+                # not asking for the page again — they are saying the room is
+                # not in the call yet. Reloading would throw the half-finished
+                # sign-in away, so run the join buttons over the page as it
+                # stands. Nothing to retry with the automation switched off:
+                # somebody is joining that page by hand, and clicking at it
+                # from here is the last thing they need.
+                retried = False
+                if manual and self.config.bool_("AUTO_CLICK_JOIN"):
+                    retried = self.browser.retry_join()
                 log_event(
                     log, logging.DEBUG, "meeting.join_already_open",
                     provider=meeting.provider_id or "unknown", manual=manual,
+                    retried=retried,
                 )
                 return True
 
@@ -612,6 +638,10 @@ class MeetingService:
                 "age_seconds": round(snapshot.age_seconds) if snapshot.age_seconds is not None else None,
             },
             "remote": self.recent_remote_action(now),
+            "join": {
+                "mode": self.join_mode(),
+                "automation": self.browser.join_state(),
+            },
             "airplay": self.airplay.status(),
             "network_ok": network_ok,
             "setup_required": self.config.setup_required(),

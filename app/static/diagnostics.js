@@ -117,9 +117,13 @@
 
       var remote = data.remote || {};
       var remoteStatus = remote.status || {};
+      // One process turns a button into an action. If that unit is not active,
+      // the remote cannot work however well everything below reads.
+      var handler = (data.units || {})["room-remote.service"] || "unknown";
       $("remote-summary").innerHTML = kv([
         ["evdev installed", remoteStatus.available ? "yes" : "no (install python3-evdev)"],
         ["Enabled", remoteStatus.enabled ? "yes" : "no"],
+        ["Buttons handled by", "room-remote.service (" + handler + ")"],
         ["Watching", (remoteStatus.devices || []).join(", ") || "nothing"],
         ["Last button", remoteStatus.last_key || "none yet"],
         ["Last action", remoteStatus.last_action || "none yet"],
