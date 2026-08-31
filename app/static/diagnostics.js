@@ -35,7 +35,9 @@
       var detail = {
         calendar: (health.calendar && (health.calendar.error || health.calendar.description)) || "",
         browser: (health.browser && health.browser.current_url) || "",
-        airplay: (health.airplay && health.airplay.name) ? ("advertising “" + health.airplay.name + "”") : "",
+        // The reason it is unhappy beats a name it is no longer advertising.
+        airplay: (health.airplay && health.airplay.detail) ||
+          ((health.airplay && health.airplay.name) ? ("advertising “" + health.airplay.name + "”") : ""),
         camera: ((health.poly || {}).camera || {}).path || "",
         microphone: ((health.poly || {}).microphone || {}).description || "",
         speaker: ((health.poly || {}).speaker || {}).description || "",

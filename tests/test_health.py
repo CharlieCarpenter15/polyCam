@@ -91,6 +91,35 @@ class TestReporting:
         assert report["components"]["browser"] == OFF
         assert report["status"] != FAIL
 
+    def test_a_receiver_stuck_in_a_crash_loop_gets_restarted(self, mock_config, monkeypatch):
+        """UxPlay dying over and over used to read as OK, so nothing ever acted."""
+        import app.airplay_service as airplay_module
+        from app.health_service import AIRPLAY_FAILURES_BEFORE_RESTART
+
+        changed, errors = mock_config.update({"DEV_MODE": False})
+        assert not errors, errors
+        monkeypatch.setattr(airplay_module, "which", lambda name: "/usr/bin/uxplay")
+
+        health, _, room, _ = build(mock_config)
+        restarted = []
+        monkeypatch.setattr(
+            health.airplay.system, "restart",
+            lambda unit, **kwargs: restarted.append(unit) or True,
+        )
+        monkeypatch.setattr(health.airplay.system, "unit_state", lambda unit: "active")
+
+        for _ in range(4):                     # avahi is down; UxPlay will not stay up
+            health.airplay.handle_event("started", running=True)
+            health.airplay.handle_event("exited", detail="Could not initialize dnssd library!")
+
+        report = {"airplay": health.airplay.status()}
+        assert report["airplay"]["status"] == FAIL
+
+        for _ in range(AIRPLAY_FAILURES_BEFORE_RESTART):
+            health._recover_airplay(report)
+
+        assert restarted == ["room-airplay.service"]
+
     def test_a_dead_browser_is_a_failure(self, mock_config):
         health, _, _, _ = build(mock_config, FakeBrowser(alive=False, enabled=True))
         report = health.report(network_ok=True)

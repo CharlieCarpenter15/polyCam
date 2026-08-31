@@ -37,20 +37,6 @@ def tiny_mp4() -> bytes:
 
 
 @pytest.fixture()
-def app(mock_config):
-    from app.main import create_app
-
-    application = create_app(mock_config, start_services=False)
-    application.config.update(TESTING=True)
-    return application
-
-
-@pytest.fixture()
-def client(app):
-    return app.test_client()
-
-
-@pytest.fixture()
 def token(client):
     """The CSRF token a real page would carry."""
     response = client.get("/panel")

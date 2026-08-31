@@ -73,6 +73,21 @@ def mock_config(config):
 
 
 @pytest.fixture()
+def app(mock_config):
+    """The Flask application, with the background services left unstarted."""
+    from app.main import create_app
+
+    application = create_app(mock_config, start_services=False)
+    application.config.update(TESTING=True)
+    return application
+
+
+@pytest.fixture()
+def client(app):
+    return app.test_client()
+
+
+@pytest.fixture()
 def ics_now():
     """The instant the sample feed is built around, to the minute."""
     from datetime import datetime, timezone

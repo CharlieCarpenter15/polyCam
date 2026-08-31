@@ -929,7 +929,16 @@ def register_routes(app: Flask, appliance: RoomAppliance) -> None:  # noqa: C901
         payload = request.get_json(silent=True) or {}
         event = str(payload.get("event") or "")
         client = str(payload.get("client") or "")
-        return jsonify(appliance.airplay.handle_event(event, client=client))
+        detail = str(payload.get("detail") or "")
+        running = payload.get("running")
+        return jsonify(
+            appliance.airplay.handle_event(
+                event,
+                client=client,
+                detail=detail,
+                running=None if running is None else bool(running),
+            )
+        )
 
     @app.route("/api/internal/action", methods=["POST"])
     @require_internal

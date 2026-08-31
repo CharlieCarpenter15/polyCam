@@ -42,8 +42,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # recorded UxPlay output.
 airplay_event_for_line() {
   local line="$1"
-  local lowered
-  lowered="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+  local lowered="${1,,}"
   case "$lowered" in
     # -nohold announces the takeover by IP address, and the mirroring line that
     # follows reports the session anyway. Matched first: it also says "from".
@@ -62,8 +61,25 @@ airplay_event_for_line() {
   esac
 }
 
-# Sourcing this script with ROOM_AIRPLAY_MATCH_ONLY set defines the matcher and
-# stops there, which is how the tests exercise it without starting a receiver.
+# True when a line looks like UxPlay explaining why it is about to give up.
+#
+# UxPlay exits rather than carrying on when it cannot register with mDNS or open
+# a window, and says why immediately beforehand — "Could not initialize dnssd
+# library!: error -65537" is avahi-daemon not running. Keeping that sentence is
+# the difference between the dashboard saying "AirPlay: Problem · avahi is not
+# running" and leaving somebody to search the network for a fault on this Pi.
+airplay_line_is_failure() {
+  local lowered="${1,,}"
+  case "$lowered" in
+    # A client going away is ordinary, and is already a session event.
+    *"lost connection with client"*) return 1 ;;
+    *"could not"* | *"cannot"* | *"failed"* | *"error"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Sourcing this script with ROOM_AIRPLAY_MATCH_ONLY set defines the matchers and
+# stops there, which is how the tests exercise them without starting a receiver.
 if [ -n "${ROOM_AIRPLAY_MATCH_ONLY:-}" ]; then
   # Sourced (the tests) returns; run directly by mistake, exit instead.
   [ "${BASH_SOURCE[0]}" != "$0" ] && return 0
@@ -91,18 +107,32 @@ if ! command -v uxplay >/dev/null 2>&1; then
   exec sleep infinity
 fi
 
+# UxPlay's output is read inside a pipeline, which bash runs in a subshell, so
+# what it saw cannot be read back from a variable once the pipeline ends. These
+# two files carry it across: whether UxPlay is up (for the heartbeat, which runs
+# in yet another subshell) and the last thing it complained about.
+ROOM_VAR="${ROOM_APPLIANCE_VAR:-$ROOM_ROOT/var}"
+mkdir -p "$ROOM_VAR" 2>/dev/null || true
+UXPLAY_STATE_FILE="$ROOM_VAR/airplay-uxplay-state"
+UXPLAY_ERROR_FILE="$ROOM_VAR/airplay-last-error"
+
 report() {
-  # report EVENT [CLIENT]
+  # report EVENT [CLIENT] [DETAIL]
   #
-  # The client name comes from UxPlay's output, so it is untrusted text going
-  # into a JSON body. Rather than escaping it, reduce it to characters that
-  # cannot affect JSON at all (letters, digits, dot, colon, dash, underscore,
-  # space) and cap the length. A device called `"` simply loses that character.
+  # The client name and the detail both come from UxPlay's output, so they are
+  # untrusted text going into a JSON body. Rather than escaping it, reduce them
+  # to characters that cannot affect JSON at all — no double quote, no
+  # backslash, no control characters — and cap the length. An apostrophe is
+  # safe and stays, because "Charlie's iPhone" is what goes up on the TV.
   local event="$1"
-  local client
-  client="$(printf '%s' "${2-}" | tr -cd '[:alnum:].:_ -' | cut -c1-60)"
+  local client detail running
+  client="$(printf '%s' "${2-}" | tr -cd "[:alnum:].:_ '-" | cut -c1-60)"
+  detail="$(printf '%s' "${3-}" | tr -cd "[:alnum:].,:;!?()/_ '-" | cut -c1-200)"
+  running=false
+  [ "$(cat "$UXPLAY_STATE_FILE" 2>/dev/null)" = "up" ] && running=true
   room_post_internal /api/internal/airplay \
-    "$(printf '{"event":"%s","client":"%s"}' "$event" "$client")"
+    "$(printf '{"event":"%s","client":"%s","detail":"%s","running":%s}' \
+       "$event" "$client" "$detail" "$running")"
 }
 
 # --------------------------------------------------------------------- args
@@ -149,12 +179,13 @@ fi
 
 if [ -n "$AIRPLAY_PIN" ]; then PIN_STATE=yes; else PIN_STATE=no; fi
 room_log "airplay.starting" "name=$AIRPLAY_NAME" "pin=$PIN_STATE"
-report started
 
 # ------------------------------------------------------------------ run loop
 
-# A heartbeat lets the backend tell "UxPlay is fine and nobody is sharing" from
-# "the supervisor has died", which are very different situations.
+# A heartbeat says *this script* is alive, which is a different claim from
+# "UxPlay is up" — a supervisor faithfully restarting a receiver that will not
+# start is precisely the case worth reporting. `report` reads the current answer
+# to the second question out of the state file.
 heartbeat() {
   while true; do
     sleep 60
@@ -164,6 +195,7 @@ heartbeat() {
 heartbeat &
 
 cleanup() {
+  local code=$?
   # Take the trap off first, so a signal arriving during cleanup cannot re-enter.
   trap - EXIT INT TERM
   # Kill everything this script started: the heartbeat, and UxPlay itself when
@@ -173,7 +205,14 @@ cleanup() {
   for pid in $(jobs -p); do
     kill "$pid" 2>/dev/null || true
   done
+  printf 'down\n' > "$UXPLAY_STATE_FILE" 2>/dev/null || true
   report stopped
+  rm -f "$UXPLAY_STATE_FILE" "$UXPLAY_ERROR_FILE" 2>/dev/null || true
+  # A signal handler returns to wherever the script was, so without this the
+  # run loop carried on after systemd had asked it to stop: the receiver kept
+  # restarting through the whole of TimeoutStopSec, and every "restart AirPlay"
+  # took fifteen seconds to do something it had already reported doing.
+  exit "$code"
 }
 trap cleanup EXIT INT TERM
 
@@ -215,16 +254,24 @@ while true; do
   # ${PIPESTATUS[0]} names UxPlay's own exit code unambiguously. (`$?` happens
   # to agree here because pipefail is set, but it reports the pipeline as a
   # whole, so it would start lying the moment the read loop could fail.)
+  : > "$UXPLAY_ERROR_FILE" 2>/dev/null || true
+  printf 'up\n' > "$UXPLAY_STATE_FILE" 2>/dev/null || true
+  report started
+
   "${UXPLAY_CMD[@]}" "${UXPLAY_ARGS[@]}" 2>&1 |
     while IFS= read -r line; do
       printf '%s\n' "$line"
+      airplay_line_is_failure "$line" && printf '%s\n' "$line" > "$UXPLAY_ERROR_FILE"
       handle_line "$line"
     done
   status="${PIPESTATUS[0]}"
 
+  printf 'down\n' > "$UXPLAY_STATE_FILE" 2>/dev/null || true
   RESTARTS=$((RESTARTS + 1))
-  room_log "airplay.uxplay_exited" "status=$status" "restarts=$RESTARTS"
-  report restarted
+  REASON="$(head -n1 "$UXPLAY_ERROR_FILE" 2>/dev/null)"
+  room_log "airplay.uxplay_exited" "status=$status" "restarts=$RESTARTS" \
+    "reason=${REASON:-none reported}"
+  report exited "" "${REASON:-UxPlay exited with status $status}"
 
   # Back off a little so a persistent failure (no display, port already in use)
   # does not spin. systemd would restart the whole unit anyway; this keeps the

@@ -638,11 +638,15 @@ needs to feel responsive more than it needs perfectly paced frames.
 
 **If the room does not appear in Screen Mirroring**
 
-1. The device must be on the same network as the Pi. AirPlay discovery uses
+1. Open **Diagnostics** and read the AirPlay line. A receiver that cannot start
+   says why there — `Could not initialize dnssd library` is avahi-daemon not
+   running, which is the usual cause. UxPlay exits rather than carrying on when
+   it cannot register with mDNS, so nothing is advertised at all.
+2. Check discovery is running: `systemctl is-active avahi-daemon`
+3. The device must be on the same network as the Pi. AirPlay discovery uses
    mDNS, which most guest and "client isolation" Wi-Fi networks block.
-2. Check the receiver is running: `./scripts/roomctl status`
-3. Check discovery is running: `systemctl is-active avahi-daemon`
 4. Restart it: control panel → **2 · Restart AirPlay**
+5. The whole story: `journalctl --user -u room-airplay -n 100`
 
 ---
 
